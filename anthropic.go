@@ -8,6 +8,23 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
 )
 
+// ToolsToAnthropic converts the tool format to Anthropic's API format.
+func ToolsToAnthropic(tools []Tool) []anthropic.ToolUnionParam {
+	anthropicTools := []anthropic.ToolUnionParam{}
+	for _, tool := range tools {
+		anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{
+			OfTool: &anthropic.ToolParam{
+				Name:        tool.Name,
+				Description: anthropic.String(tool.Description),
+				InputSchema: anthropic.ToolInputSchemaParam{
+					Properties: tool.Parameters,
+				},
+			},
+		})
+	}
+	return anthropicTools
+}
+
 // MessagesToAnthropic converts internal message format to Anthropic's API format.
 // It extracts system messages into a separate slice of TextBlockParams, suitable
 // for the 'System' parameter in the Anthropic API request.

@@ -15,6 +15,45 @@ type GoogleStreamIterator interface {
 	Next() (*genai.GenerateContentResponse, error)
 }
 
+func ToolsToGoogle(tools []Tool) ([]*genai.Tool, error) {
+	googleTools := []*genai.Tool{}
+	for _, tool := range tools {
+		var schema *genai.Schema
+		if tool.Parameters != nil {
+			// Wrap the user-provided parameters into the required JSON Schema structure.
+			wrappedParams := map[string]any{
+				"type":       "object",
+				"properties": tool.Parameters,
+				// Assuming required fields are handled within tool.Parameters if needed
+			}
+
+			// Marshal the wrapped map to JSON
+			paramBytes, err := json.Marshal(wrappedParams)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal wrapped parameters for tool %q: %w", tool.Name, err)
+			}
+
+			// Unmarshal the JSON into a genai.Schema
+			schema = &genai.Schema{}
+			err = json.Unmarshal(paramBytes, schema)
+			if err != nil {
+				return nil, fmt.Errorf("failed to unmarshal parameters into schema for tool %q: %w", tool.Name, err)
+			}
+		}
+
+		googleTools = append(googleTools, &genai.Tool{
+			FunctionDeclarations: []*genai.FunctionDeclaration{
+				{
+					Name:        tool.Name,
+					Description: tool.Description,
+					Parameters:  schema, // Use the unmarshaled schema
+				},
+			},
+		})
+	}
+	return googleTools, nil
+}
+
 // MessagesToGoogle converts internal message format to Google's genai.Content slice.
 // System messages are ignored.
 func MessagesToGoogle(messages []Message) ([]*genai.Content, error) {

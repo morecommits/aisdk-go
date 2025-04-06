@@ -290,6 +290,20 @@ type Message struct {
 	ToolInvocations []ToolInvocation `json:"toolInvocations"`
 }
 
+type Tool struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// Parameters is a JSON schema.
+	//
+	// e.g.
+	// map[string]any{
+	//   "message": {
+	//     "type": "string",
+	//   }
+	// }
+	Parameters map[string]any `json:"parameters"`
+}
+
 type ToolInvocationState string
 
 const (

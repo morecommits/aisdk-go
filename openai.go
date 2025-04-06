@@ -5,8 +5,35 @@ import (
 	"fmt"
 
 	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/packages/ssestream"
 )
+
+// ToolsToOpenAI converts the tool format to OpenAI's API format.
+func ToolsToOpenAI(tools []Tool) []openai.ChatCompletionToolParam {
+	openaiTools := []openai.ChatCompletionToolParam{}
+	for _, tool := range tools {
+		// Wrap the user-provided parameters into the required JSON Schema structure.
+		var schemaParams map[string]any
+		if tool.Parameters != nil {
+			schemaParams = map[string]any{
+				"type":       "object",
+				"properties": tool.Parameters,
+				// Note: We could potentially infer required fields here if needed,
+				// but for now, assume the user provides them within tool.Parameters if necessary.
+			}
+		}
+
+		openaiTools = append(openaiTools, openai.ChatCompletionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        tool.Name,
+				Description: param.NewOpt(tool.Description),
+				Parameters:  schemaParams, // Use the wrapped parameters
+			},
+		})
+	}
+	return openaiTools
+}
 
 // MessagesToOpenAI converts internal message format to OpenAI's API format.
 func MessagesToOpenAI(messages []Message) ([]openai.ChatCompletionMessageParamUnion, error) {

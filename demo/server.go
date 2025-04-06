@@ -14,7 +14,6 @@ import (
 	"github.com/kylecarbs/aisdk-go"
 	"github.com/openai/openai-go"
 	openaioption "github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/packages/param"
 	"google.golang.org/genai"
 )
 
@@ -66,6 +65,16 @@ func run(ctx context.Context) error {
 
 		dataStream := aisdk.NewDataStream(w)
 
+		tools := []aisdk.Tool{{
+			Name:        "test",
+			Description: "A test tool. Only use if the user explicitly requests it.",
+			Parameters: map[string]any{
+				"message": map[string]string{
+					"type": "string",
+				},
+			},
+		}}
+
 		switch req.Provider {
 		case "openai":
 			messages, err := aisdk.MessagesToOpenAI(req.Messages)
@@ -81,25 +90,10 @@ func run(ctx context.Context) error {
 
 			for {
 				stream := openAIClient.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
-					Model:           req.Model,
-					Messages:        messages,
-					ReasoningEffort: reasoningEffort,
-					Tools: []openai.ChatCompletionToolParam{
-						{
-							Function: openai.FunctionDefinitionParam{
-								Name:        "test",
-								Description: param.NewOpt("A test tool. Only use if the user explicitly requests it."),
-								Parameters: openai.FunctionParameters{
-									"type": "object",
-									"properties": map[string]interface{}{
-										"message": map[string]string{
-											"type": "string",
-										},
-									},
-								},
-							},
-						},
-					},
+					Model:               req.Model,
+					Messages:            messages,
+					ReasoningEffort:     reasoningEffort,
+					Tools:               aisdk.ToolsToOpenAI(tools),
 					MaxCompletionTokens: openai.Int(2048),
 				})
 				response, err := aisdk.PipeOpenAIToDataStream(stream, dataStream, opts)
@@ -151,19 +145,7 @@ func run(ctx context.Context) error {
 					System:    system,
 					MaxTokens: 4096,
 					Thinking:  thinking,
-					Tools: []anthropic.ToolUnionParam{{
-						OfTool: &anthropic.ToolParam{
-							Name:        "test",
-							Description: anthropic.String("A test tool. Only use if the user explicitly requests it."),
-							InputSchema: anthropic.ToolInputSchemaParam{
-								Properties: map[string]interface{}{
-									"message": map[string]string{
-										"type": "string",
-									},
-								},
-							},
-						},
-					}},
+					Tools:     aisdk.ToolsToAnthropic(tools),
 				})
 				response, err := aisdk.PipeAnthropicToDataStream(stream, dataStream, opts)
 				if err != nil {
@@ -192,22 +174,15 @@ func run(ctx context.Context) error {
 				}
 			}
 
+			tools, err := aisdk.ToolsToGoogle(tools)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
 			for {
 				stream := googleClient.Models.GenerateContentStream(ctx, req.Model, messages, &genai.GenerateContentConfig{
-					Tools: []*genai.Tool{{
-						FunctionDeclarations: []*genai.FunctionDeclaration{{
-							Name:        "test",
-							Description: "A test tool. Only use if the user explicitly requests it.",
-							Parameters: &genai.Schema{
-								Type: genai.TypeObject,
-								Properties: map[string]*genai.Schema{
-									"message": {
-										Type: genai.TypeString,
-									},
-								},
-							},
-						}},
-					}},
+					Tools:          tools,
 					ThinkingConfig: thinkingConfig,
 				})
 
