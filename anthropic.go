@@ -12,13 +12,24 @@ import (
 func ToolsToAnthropic(tools []Tool) []anthropic.ToolUnionParam {
 	anthropicTools := []anthropic.ToolUnionParam{}
 	for _, tool := range tools {
+		// Construct the ToolInputSchemaParam struct directly
+		inputSchema := anthropic.ToolInputSchemaParam{
+			Properties: tool.Schema.Properties, // Assuming Properties is map[string]interface{}
+			// Type defaults to "object" via omitempty / SDK marshalling if needed
+		}
+		// Add required fields if they exist
+		if len(tool.Schema.Required) > 0 {
+			if inputSchema.ExtraFields == nil {
+				inputSchema.ExtraFields = make(map[string]interface{})
+			}
+			inputSchema.ExtraFields["required"] = tool.Schema.Required
+		}
+
 		anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        tool.Name,
 				Description: anthropic.String(tool.Description),
-				InputSchema: anthropic.ToolInputSchemaParam{
-					Properties: tool.Parameters,
-				},
+				InputSchema: inputSchema, // Assign the struct directly
 			},
 		})
 	}
@@ -26,513 +37,280 @@ func ToolsToAnthropic(tools []Tool) []anthropic.ToolUnionParam {
 }
 
 // MessagesToAnthropic converts internal message format to Anthropic's API format.
-// It extracts system messages into a separate slice of TextBlockParams, suitable
-// for the 'System' parameter in the Anthropic API request.
+// It extracts system messages into a separate slice of TextBlockParams and groups
+// consecutive user/tool and assistant messages according to Anthropic's rules.
+// It handles the case where a single assistant message part contains both the
+// tool call and its result, splitting them into the required assistant tool_use
+// and user tool_result blocks.
 func MessagesToAnthropic(messages []Message) ([]anthropic.MessageParam, []anthropic.TextBlockParam, error) {
 	anthropicMessages := []anthropic.MessageParam{}
 	systemPrompts := []anthropic.TextBlockParam{}
 
-	for _, message := range messages {
-		switch message.Role {
-		case "user":
-			// Construct ContentBlockParamUnion for user messages.
-			userContent := []anthropic.ContentBlockParamUnion{
-				{OfRequestTextBlock: &anthropic.TextBlockParam{Text: message.Content}},
+	// Iterate through messages and process them
+	for i := 0; i < len(messages); i++ {
+		message := messages[i]
+
+		if message.Role == "system" {
+			// Handle system messages
+			systemPrompts = append(systemPrompts, anthropic.TextBlockParam{Text: message.Content})
+			for _, part := range message.Parts {
+				if part.Type == PartTypeText && part.Text != "" {
+					systemPrompts = append(systemPrompts, anthropic.TextBlockParam{Text: part.Text})
+				}
+				// Ignore other parts in system messages for now
 			}
-			anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
-				Role:    "user",
-				Content: userContent,
-			})
+			continue
+		}
 
-		case "assistant":
-			// Construct ContentBlockParamUnions for the assistant's response part (text + tool calls).
-			assistantContentBlocks := []anthropic.ContentBlockParamUnion{}
-			// Construct ContentBlockParamUnions for the subsequent user message containing tool results.
-			toolResultBlocks := []anthropic.ContentBlockParamUnion{}
+		var role anthropic.MessageParamRole
+		var currentContent []anthropic.ContentBlockParamUnion
 
-			// Add text content if present.
-			if message.Content != "" {
-				assistantContentBlocks = append(assistantContentBlocks, anthropic.ContentBlockParamUnion{
+		if message.Role == "assistant" {
+			role = anthropic.MessageParamRoleAssistant
+			// Process parts for assistant message
+			for _, part := range message.Parts {
+				switch part.Type {
+				case PartTypeText:
+					if part.Text != "" {
+						currentContent = append(currentContent, anthropic.ContentBlockParamUnion{
+							OfRequestTextBlock: &anthropic.TextBlockParam{Text: part.Text},
+						})
+					}
+				case PartTypeToolInvocation:
+					if part.ToolInvocation == nil {
+						return nil, nil, fmt.Errorf("assistant message part has type tool-invocation but nil ToolInvocation field (ID: %s)", message.ID)
+					}
+
+					// Add the tool *call* part
+					argsJSON, err := json.Marshal(part.ToolInvocation.Args)
+					if err != nil {
+						return nil, nil, fmt.Errorf("marshalling tool input for call %s: %w", part.ToolInvocation.ToolCallID, err)
+					}
+					currentContent = append(currentContent, anthropic.ContentBlockParamUnion{
+						OfRequestToolUseBlock: &anthropic.ToolUseBlockParam{
+							ID:    part.ToolInvocation.ToolCallID,
+							Name:  part.ToolInvocation.ToolName,
+							Input: json.RawMessage(argsJSON),
+						},
+					})
+
+					// If the state is Result, we need to immediately add a user message with the result
+					if part.ToolInvocation.State == ToolInvocationStateResult {
+						// Flush the current assistant message first
+						if len(currentContent) > 0 {
+							anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
+								Role:    role,
+								Content: currentContent,
+							})
+							currentContent = nil // Reset for the potential next message
+						}
+
+						// Now create the user message with the tool result
+						resultBytes, err := json.Marshal(part.ToolInvocation.Result)
+						if err != nil {
+							return nil, nil, fmt.Errorf("marshalling tool result for call %s: %w", part.ToolInvocation.ToolCallID, err)
+						}
+						userResultContent := []anthropic.ContentBlockParamUnion{
+							{
+								OfRequestToolResultBlock: &anthropic.ToolResultBlockParam{
+									ToolUseID: part.ToolInvocation.ToolCallID,
+									Content: []anthropic.ToolResultBlockParamContentUnion{
+										{
+											OfRequestTextBlock: &anthropic.TextBlockParam{Text: string(resultBytes)},
+										},
+									},
+								},
+							},
+						}
+						anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
+							Role:    anthropic.MessageParamRoleUser, // Result must be in user role
+							Content: userResultContent,
+						})
+						// Since we added the user message, effectively skip adding the current assistant message later
+						role = "" // Mark role as processed
+					}
+					// TODO: Add support for other part types
+				}
+			}
+		} else if message.Role == "user" || message.Role == "tool" {
+			role = anthropic.MessageParamRoleUser
+			// Process parts for user/tool message
+			for _, part := range message.Parts {
+				switch part.Type {
+				case PartTypeText:
+					if part.Text != "" {
+						currentContent = append(currentContent, anthropic.ContentBlockParamUnion{
+							OfRequestTextBlock: &anthropic.TextBlockParam{Text: part.Text},
+						})
+					}
+				case PartTypeToolInvocation:
+					if part.ToolInvocation == nil {
+						return nil, nil, fmt.Errorf("user/tool message part has type tool-invocation but nil ToolInvocation field (ID: %s)", message.ID)
+					}
+					// User/tool role should only contain results
+					if part.ToolInvocation.State != ToolInvocationStateResult {
+						return nil, nil, fmt.Errorf("non-result tool invocation found in user/tool message (ID: %s, State: %s)", message.ID, part.ToolInvocation.State)
+					}
+					resultBytes, err := json.Marshal(part.ToolInvocation.Result)
+					if err != nil {
+						return nil, nil, fmt.Errorf("marshalling tool result for call %s: %w", part.ToolInvocation.ToolCallID, err)
+					}
+					currentContent = append(currentContent, anthropic.ContentBlockParamUnion{
+						OfRequestToolResultBlock: &anthropic.ToolResultBlockParam{
+							ToolUseID: part.ToolInvocation.ToolCallID,
+							Content: []anthropic.ToolResultBlockParamContentUnion{
+								{
+									OfRequestTextBlock: &anthropic.TextBlockParam{Text: string(resultBytes)},
+								},
+							},
+						},
+					})
+					// TODO: Add support for other part types
+				}
+			}
+			// Add plain content as text block if no parts were processed
+			if len(currentContent) == 0 && message.Content != "" {
+				currentContent = append(currentContent, anthropic.ContentBlockParamUnion{
 					OfRequestTextBlock: &anthropic.TextBlockParam{Text: message.Content},
 				})
 			}
+		} else {
+			return nil, nil, fmt.Errorf("unsupported message role encountered: %s", message.Role)
+		}
 
-			// Process tool invocations.
-			for _, ti := range message.ToolInvocations {
-				switch ti.State {
-				case ToolInvocationStateCall, ToolInvocationStatePartialCall:
-					// Add tool_use block to the assistant message content.
-					argsJSON, err := json.Marshal(ti.Args)
-					if err != nil {
-						return nil, nil, fmt.Errorf("marshalling tool args for call %s: %w", ti.ToolCallID, err)
-					}
-					assistantContentBlocks = append(assistantContentBlocks, anthropic.ContentBlockParamUnion{
-						OfRequestToolUseBlock: &anthropic.ToolUseBlockParam{
-							ID:    ti.ToolCallID,
-							Name:  ti.ToolName,
-							Input: json.RawMessage(argsJSON),
-						},
-					})
-				case ToolInvocationStateResult:
-					// Add BOTH the tool_use block to the assistant message
-					// AND the tool_result block to the subsequent user message.
-
-					// 1. Add tool_use block to assistant content
-					argsJSON, err := json.Marshal(ti.Args)
-					if err != nil {
-						return nil, nil, fmt.Errorf("marshalling tool args for call %s: %w", ti.ToolCallID, err)
-					}
-					assistantContentBlocks = append(assistantContentBlocks, anthropic.ContentBlockParamUnion{
-						OfRequestToolUseBlock: &anthropic.ToolUseBlockParam{
-							ID:    ti.ToolCallID,
-							Name:  ti.ToolName,
-							Input: json.RawMessage(argsJSON),
-						},
-					})
-
-					// 2. Add tool_result block for the next user message
-					resultJSON, err := json.Marshal(ti.Result)
-					if err != nil {
-						return nil, nil, fmt.Errorf("marshalling tool result for call %s: %w", ti.ToolCallID, err)
-					}
-					// Assuming result content should be stringified JSON, and isError is false.
-					toolResultUnion := anthropic.NewToolResultBlock(ti.ToolCallID, string(resultJSON), false)
-					toolResultBlocks = append(toolResultBlocks, toolResultUnion)
-				}
-			}
-
-			// Add the assistant message only if it has actual content (text or tool use blocks)
-			// relevant to the Anthropic API conversation history.
-			// Reasoning-only messages (empty content, no tool calls) are skipped.
-			if message.Content != "" || len(assistantContentBlocks) > 0 {
-				// If the message is effectively empty *before* considering tool results
-				// (no text content, no tool calls initiated in *this* turn),
-				// Anthropic might still require a content block if it's an otherwise empty assistant turn.
-				// Add an empty text block specifically for this case.
-				if message.Content == "" && len(assistantContentBlocks) == 0 {
-					assistantContentBlocks = append(assistantContentBlocks, anthropic.ContentBlockParamUnion{
-						OfRequestTextBlock: &anthropic.TextBlockParam{Text: ""},
-					})
-				}
-
-				// Append the message if it has any content blocks (original or the empty placeholder)
-				if len(assistantContentBlocks) > 0 {
-					anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
-						Role:    anthropic.MessageParamRoleAssistant,
-						Content: assistantContentBlocks,
-					})
-				}
-			}
-
-			// If there were tool results, add them in a new user message.
-			if len(toolResultBlocks) > 0 {
-				// Anthropic requires tool results to be in a user message.
+		// Add the processed message if it has content and role wasn't handled by tool result splitting
+		if len(currentContent) > 0 && role != "" {
+			// Check if the last message was of the same role, if so, merge content
+			lastIdx := len(anthropicMessages) - 1
+			if lastIdx >= 0 && anthropicMessages[lastIdx].Role == role {
+				anthropicMessages[lastIdx].Content = append(anthropicMessages[lastIdx].Content, currentContent...)
+			} else {
 				anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
-					Role:    "user",
-					Content: toolResultBlocks,
+					Role:    role,
+					Content: currentContent,
 				})
 			}
-
-		case "system":
-			// Append as TextBlockParam
-			systemPrompts = append(systemPrompts, anthropic.TextBlockParam{Text: message.Content})
-
-		default:
-			return nil, nil, fmt.Errorf("unsupported message role encountered: %s", message.Role)
 		}
 	}
 
 	return anthropicMessages, systemPrompts, nil
 }
 
-// AnthropicToMessages converts Anthropic's API message format back to the internal []Message format.
-// It takes both the message history and the system prompts (which Anthropic handles separately).
-func AnthropicToMessages(anthropicMessages []anthropic.MessageParam) ([]Message, error) {
-	messages := []Message{}
-	var lastAssistantMessage *Message // Keep track of the last assistant message to potentially attach tool results
-
-	for _, anthropicMsg := range anthropicMessages {
-		var currentMessage Message
-		currentMessage.Role = string(anthropicMsg.Role) // Role is directly convertible
-		// toolInvocations slice will be populated within the loop
-		toolInvocations := []ToolInvocation{}
-
-		for _, contentUnion := range anthropicMsg.Content {
-			// Check union fields directly instead of using AsAny
-			switch {
-			case contentUnion.OfRequestTextBlock != nil:
-				block := contentUnion.OfRequestTextBlock
-				// Append text content.
-				currentMessage.Content += block.Text
-			case contentUnion.OfRequestToolUseBlock != nil:
-				block := contentUnion.OfRequestToolUseBlock
-				// This is a tool call initiated by the assistant.
-				var argsMap map[string]interface{} // Use interface{} for consistency
-				// Marshal the Input interface{} back to JSON bytes
-				inputBytes, err := json.Marshal(block.Input)
-				if err != nil {
-					// Handle marshalling error (less likely for valid input struct)
-					argsMap = nil
-					fmt.Printf("Warning: Failed to marshal tool use input interface for %s (%s): %v\n", block.Name, block.ID, err)
-				} else {
-					// Unmarshal the JSON bytes into our map
-					err = json.Unmarshal(inputBytes, &argsMap)
-					if err != nil {
-						// Handle potential unmarshal error gracefully
-						argsMap = nil
-						fmt.Printf("Warning: Failed to unmarshal tool use input JSON for %s (%s): %v\n", block.Name, block.ID, err)
-					}
-				}
-				// Add to the *local* toolInvocations slice for this message
-				toolInvocations = append(toolInvocations, ToolInvocation{
-					ToolCallID: block.ID,
-					ToolName:   block.Name,
-					Args:       argsMap,
-					State:      ToolInvocationStateCall, // Mark as a call
-				})
-			case contentUnion.OfRequestToolResultBlock != nil:
-				block := contentUnion.OfRequestToolResultBlock
-				// This is a tool result provided by the user.
-				// It needs to be attached to the corresponding call in the *previous* assistant message.
-				if lastAssistantMessage == nil {
-					return nil, fmt.Errorf("received tool result block (user role) without a preceding assistant message containing the tool call")
-				}
-				found := false
-				for i := range lastAssistantMessage.ToolInvocations {
-					if lastAssistantMessage.ToolInvocations[i].ToolCallID == block.ToolUseID {
-						// Attempt to get result directly from block.Content via type assertion
-						resultData := block.Content[0].OfRequestTextBlock.Text
-						lastAssistantMessage.ToolInvocations[i].Result = resultData
-						lastAssistantMessage.ToolInvocations[i].State = ToolInvocationStateResult
-						found = true
-						break
-					}
-				}
-				if !found {
-					return nil, fmt.Errorf("received tool result for unknown tool use ID: %s", block.ToolUseID)
-				}
-			default:
-				var typeName string
-				if contentUnion.OfRequestTextBlock != nil {
-					typeName = fmt.Sprintf("%T", contentUnion.OfRequestTextBlock)
-				} else if contentUnion.OfRequestToolUseBlock != nil {
-					typeName = fmt.Sprintf("%T", contentUnion.OfRequestToolUseBlock)
-				} else if contentUnion.OfRequestToolResultBlock != nil {
-					typeName = fmt.Sprintf("%T", contentUnion.OfRequestToolResultBlock)
-				} else {
-					typeName = "unknown (nil union field)"
-				}
-				return nil, fmt.Errorf("unsupported Anthropic content block type: %s", typeName)
-			}
+// AnthropicToDataStream pipes an Anthropic stream to a DataStream.
+func AnthropicToDataStream(stream *ssestream.Stream[anthropic.MessageStreamEventUnion]) DataStream {
+	return func(yield func(DataStreamPart, error) bool) {
+		var lastChunk *anthropic.MessageStreamEventUnion
+		var finalReason FinishReason = FinishReasonUnknown
+		var finalUsage Usage
+		var currentToolCall struct {
+			ID   string
+			Args string
 		}
 
-		// Unconditionally assign the collected tool invocations (will be empty for non-assistant or no-tool messages)
-		currentMessage.ToolInvocations = toolInvocations
+		for stream.Next() {
+			chunk := stream.Current()
+			lastChunk = &chunk
 
-		// Add the composed message to our list, unless it's a user message that ONLY contained tool results.
-		isUserMessage := currentMessage.Role == string(anthropic.MessageParamRoleUser)
-		hasToolResultsOnly := false
-		if isUserMessage {
-			hasToolResultsOnly = true // Assume true initially
-			for _, contentUnion := range anthropicMsg.Content {
-				if contentUnion.OfRequestToolResultBlock == nil {
-					hasToolResultsOnly = false // Found non-result content (e.g., text)
-					break
+			event := chunk.AsAny()
+			switch event := event.(type) {
+			case anthropic.MessageStartEvent:
+				if !yield(StartStepStreamPart{
+					MessageID: event.Message.ID,
+				}, nil) {
+					return
 				}
-			}
-		}
 
-		if !hasToolResultsOnly {
-			messages = append(messages, currentMessage)
-		}
-
-		// Update lastAssistantMessage pointer for the next iteration.
-		// Important: Use the message *just added* to the slice if it was an assistant message
-		if !hasToolResultsOnly && currentMessage.Role == string(anthropic.MessageParamRoleAssistant) {
-			lastAssistantMessage = &messages[len(messages)-1]
-		} else if !hasToolResultsOnly {
-			lastAssistantMessage = nil // Reset if it wasn't an assistant or was skipped
-		}
-		// If hasToolResultsOnly was true, lastAssistantMessage remains unchanged from previous iteration.
-	}
-
-	return messages, nil
-}
-
-// PipeAnthropicToDataStream pipes an Anthropic message stream to a DataStream.
-// It translates Anthropic stream events into DataStreamParts and calls the optional
-// HandleToolCall function when a complete tool use block is received.
-// It returns the final accumulated message from the stream.
-func PipeAnthropicToDataStream(stream *ssestream.Stream[anthropic.MessageStreamEventUnion], dataStream DataStream, opts *PipeOptions) (*PipeResponse[[]anthropic.MessageParam], error) {
-	message := anthropic.Message{}
-	toolCalls := map[int]*wipToolCall{}
-	toolResults := []anthropic.ContentBlockParamUnion{}
-	for stream.Next() {
-		eventUnion := stream.Current()
-
-		// Accumulate the event's effects on the overall message state first.
-		// This ensures message.Usage and message.StopReason are updated before generating final parts.
-		err := message.Accumulate(eventUnion)
-		if err != nil {
-			// Log or handle accumulation error if necessary
-			return nil, fmt.Errorf("failed to accumulate anthropic stream event: %w", err)
-		}
-
-		event := eventUnion.AsAny()
-
-		switch event := event.(type) {
-		case anthropic.MessageStartEvent:
-			// Send the StartStepStreamPart ('f') here, using the actual message ID from Anthropic.
-			err = dataStream.Write(StartStepStreamPart{
-				MessageID: event.Message.ID,
-			})
-			if err != nil {
-				return nil, err
-			}
-			continue
-
-		case anthropic.ContentBlockStartEvent:
-			// If it's a tool use block, start tracking it and send 'b' part.
-			if block, ok := event.ContentBlock.AsAny().(anthropic.ToolUseBlock); ok {
-				index := int(event.Index)
-				// Ensure we don't re-initialize if stream is weird, though Accumulate might error first.
-				if _, exists := toolCalls[index]; !exists {
-					wip := &wipToolCall{
-						ID:   block.ID,
-						Name: block.Name,
-						Args: "",
+			case anthropic.ContentBlockDeltaEvent:
+				switch delta := event.Delta.AsAny().(type) {
+				case anthropic.TextDelta:
+					if !yield(TextStreamPart{Content: delta.Text}, nil) {
+						return
 					}
-					toolCalls[index] = wip
-					err := dataStream.Write(ToolCallStartStreamPart{
-						ToolCallID: wip.ID,
-						ToolName:   wip.Name,
-					})
-					if err != nil {
-						return nil, err
-					}
-				}
-			}
-			// No specific Vercel part for text content_block_start.
-
-		case anthropic.ContentBlockDeltaEvent:
-			index := int(event.Index)
-			switch delta := event.Delta.AsAny().(type) {
-			case anthropic.TextDelta:
-				// Send text content as '0' part.
-				if delta.Text != "" {
-					err := dataStream.Write(TextStreamPart{Content: delta.Text})
-					if err != nil {
-						return nil, err
-					}
-				}
-			case anthropic.InputJSONDelta:
-				// Append to tool call args buffer and send 'c' part.
-				if wip, exists := toolCalls[index]; exists && !wip.Finished {
-					wip.Args += delta.PartialJSON
-					// Send delta even if empty, as it's part of the stream sequence.
-					err := dataStream.Write(ToolCallDeltaStreamPart{
-						ToolCallID:    wip.ID,
+				case anthropic.InputJSONDelta:
+					// Accumulate the arguments for the current tool call
+					currentToolCall.Args += delta.PartialJSON
+					if !yield(ToolCallDeltaStreamPart{
+						ToolCallID:    currentToolCall.ID,
 						ArgsTextDelta: delta.PartialJSON,
-					})
-					if err != nil {
-						return nil, err
+					}, nil) {
+						return
 					}
-				} else {
-					// Optional: Log warning for delta targeting unknown/finished tool call
-					// fmt.Printf("Warning: InputJSONDelta for unknown/finished tool call index %d\n", index)
+				case anthropic.ThinkingDelta:
+					if !yield(ReasoningStreamPart{Content: delta.Thinking}, nil) {
+						return
+					}
 				}
-			case anthropic.ThinkingDelta:
-				err = dataStream.Write(ReasoningStreamPart{
-					Content: delta.Thinking,
-				})
-				if err != nil {
-					return nil, err
+
+			case anthropic.ContentBlockStartEvent:
+				if block, ok := event.ContentBlock.AsAny().(anthropic.ToolUseBlock); ok {
+					currentToolCall.ID = block.ID
+					currentToolCall.Args = ""
+
+					if !yield(ToolCallStartStreamPart{
+						ToolCallID: block.ID,
+						ToolName:   block.Name,
+					}, nil) {
+						return
+					}
+				}
+
+			case anthropic.MessageDeltaEvent:
+				if event.Delta.StopReason == "tool_use" {
+					finalReason = FinishReasonToolCalls
+					if event.Usage.OutputTokens != 0 {
+						tokens := event.Usage.OutputTokens
+						finalUsage.CompletionTokens = &tokens
+					}
+
+					// Reset current tool call after emitting the final delta
+					currentToolCall = struct {
+						ID   string
+						Args string
+					}{}
+				}
+
+			case anthropic.MessageStopEvent:
+				// Determine final reason if not already set by tool_use
+				if finalReason == FinishReasonUnknown {
+					finalReason = FinishReasonStop // Default if not tool_use
+				}
+
+				// Send final finish step
+				if !yield(FinishStepStreamPart{
+					FinishReason: finalReason,
+					Usage:        finalUsage,
+					IsContinued:  false,
+				}, nil) {
+					return
+				}
+
+				// Send final finish message
+				if !yield(FinishMessageStreamPart{
+					FinishReason: finalReason,
+					Usage:        finalUsage,
+				}, nil) {
+					return
 				}
 			}
-
-		case anthropic.ContentBlockStopEvent:
-			index := int(event.Index)
-			// If it's a tool call we were tracking, finalize it.
-			if wip, exists := toolCalls[index]; exists && !wip.Finished {
-				wip.Finished = true
-				var args map[string]any
-				err := json.Unmarshal([]byte(wip.Args), &args)
-				if err != nil {
-					// Error handling: Could send an ErrorStreamPart ('3') or log.
-					// For now, log warning and don't send '9' or 'a'.
-					fmt.Printf("Warning: Could not unmarshal tool args for %s (%s): %v. Args received: %s\n", wip.Name, wip.ID, err, wip.Args)
-					// Optionally send an error part:
-					// dataStream.Write(ErrorStreamPart{Content: fmt.Sprintf("Failed to parse arguments for tool %s", wip.Name)})
-				} else {
-					// Send final tool call info as '9' part.
-					err = dataStream.Write(ToolCallStreamPart{
-						ToolCallID: wip.ID,
-						ToolName:   wip.Name,
-						Args:       args,
-					})
-					if err != nil {
-						return nil, err
-					}
-
-					// Determine and send tool result as 'a' part.
-					var result any
-					if opts != nil && opts.HandleToolCall != nil {
-						// Execute the provided handler.
-						result = opts.HandleToolCall(ToolCall{
-							ID:   wip.ID,
-							Name: wip.Name,
-							Args: args,
-						})
-					} else {
-						// Default result if no handler is provided.
-						result = "No tool call handler provided"
-					}
-					err = dataStream.Write(ToolResultStreamPart{
-						ToolCallID: wip.ID,
-						Result:     result,
-					})
-					if err != nil {
-						return nil, err
-					}
-
-					jsonResult, err := json.Marshal(result)
-					if err != nil {
-						return nil, err
-					}
-					toolResults = append(toolResults, anthropic.NewToolResultBlock(wip.ID, string(jsonResult), false))
-				}
-			}
-			// No specific Vercel part for text content_block_stop.
-
-		case anthropic.MessageDeltaEvent:
-			// This event signals changes like stop reason or usage, often marking a step end.
-			// Map to FinishStepStreamPart ('e').
-			var stepReason FinishReason = FinishReasonUnknown
-			var isContinued bool = false
-			// Use the stop reason *from the delta* for the step finish reason.
-			// Check if the stop reason string is non-empty.
-			if event.Delta.StopReason != "" {
-				switch event.Delta.StopReason {
-				case "end_turn", "stop_sequence":
-					stepReason = FinishReasonStop
-				case "max_tokens":
-					stepReason = FinishReasonLength
-				case "tool_use":
-					stepReason = FinishReasonToolCalls
-					isContinued = false
-				default:
-					fmt.Printf("Warning: Unknown Anthropic stop reason in delta: %s\n", event.Delta.StopReason)
-					stepReason = FinishReasonOther
-				}
-			}
-
-			// Only write 'e' part if the delta provided a stop reason.
-			if stepReason != FinishReasonUnknown {
-				// Usage for the step: Reflect the accumulated usage *up to this point*.
-				var stepInputTokens, stepOutputTokens *int64
-				if message.Usage.JSON.InputTokens.IsPresent() {
-					tokens := int64(message.Usage.InputTokens)
-					stepInputTokens = &tokens
-				}
-				// Use accumulated output tokens which includes the delta's contribution.
-				if message.Usage.JSON.OutputTokens.IsPresent() {
-					tokens := int64(message.Usage.OutputTokens)
-					stepOutputTokens = &tokens
-				}
-
-				err = dataStream.Write(FinishStepStreamPart{
-					FinishReason: stepReason,
-					Usage: Usage{
-						PromptTokens:     stepInputTokens,
-						CompletionTokens: stepOutputTokens,
-					},
-					IsContinued: isContinued,
-				})
-				if err != nil {
-					return nil, err
-				}
-			}
-
-		case anthropic.MessageStopEvent:
-			// Message state already updated by Accumulate. Signal end of stream processing.
-			goto endStreamLoop
-
-		// case anthropic.PingEvent:
-		// Ping events are typically handled by the underlying SSE client or Accumulate.
-		// No specific Vercel part needed.
-		// continue
-
-		default:
-			// Any other event types are handled by Accumulate, but no specific Vercel part generated here.
-			// fmt.Printf("Info: Unhandled Anthropic event type in switch: %T\n", event)
-			continue
 		}
 
-	}
+		// Handle any errors from the stream
+		if err := stream.Err(); err != nil {
+			yield(nil, fmt.Errorf("anthropic stream error: %w", err))
+			return
+		}
 
-endStreamLoop:
+		// If we didn't get a message stop event (e.g., stream ended abruptly),
+		// send a final finish message based on the last known state.
+		if lastChunk == nil || lastChunk.Type != "message_stop" {
+			if finalReason == FinishReasonUnknown {
+				finalReason = FinishReasonError // Indicate abnormal termination
+			}
 
-	// Finished processing stream events. Write the final 'd' part.
-	var finalReason FinishReason
-	var inputTokens, outputTokens *int64
-
-	// Use the final accumulated usage.
-	if message.Usage.JSON.InputTokens.IsPresent() {
-		tokens := int64(message.Usage.InputTokens)
-		inputTokens = &tokens
-	}
-	if message.Usage.JSON.OutputTokens.IsPresent() {
-		tokens := int64(message.Usage.OutputTokens)
-		outputTokens = &tokens
-	}
-
-	// Use the final accumulated stop reason.
-	switch message.StopReason {
-	case "end_turn", "stop_sequence":
-		finalReason = FinishReasonStop
-	case "max_tokens":
-		finalReason = FinishReasonLength
-	case "tool_use":
-		finalReason = FinishReasonToolCalls
-	default:
-		// Determine reason if not explicitly set by Anthropic.
-		if stream.Err() != nil {
-			// If the stream ended with an error.
-			finalReason = FinishReasonError
-			fmt.Printf("Stream finished with error: %v\n", stream.Err())
-		} else if message.StopReason != "" {
-			// If Accumulate recorded an unknown reason.
-			fmt.Printf("Warning: Unknown final Anthropic stop reason: %s\n", message.StopReason)
-			finalReason = FinishReasonOther
-		} else {
-			// Default if stream ended cleanly without a specific reason (e.g., empty stream).
-			finalReason = FinishReasonStop
+			yield(FinishMessageStreamPart{
+				FinishReason: finalReason,
+				Usage:        finalUsage,
+			}, nil)
 		}
 	}
-
-	err := dataStream.Write(FinishMessageStreamPart{
-		FinishReason: finalReason,
-		Usage: Usage{
-			PromptTokens:     inputTokens,
-			CompletionTokens: outputTokens,
-		},
-	})
-	if err != nil {
-		// Don't mask stream errors if writing the final part fails.
-		if stream.Err() != nil {
-			return nil, fmt.Errorf("stream error (%v) and final write error (%w)", stream.Err(), err)
-		}
-		return nil, err
-	}
-
-	msgs := []anthropic.MessageParam{}
-	msgs = append(msgs, message.ToParam())
-	if len(toolResults) > 0 {
-		msgs = append(msgs, anthropic.NewUserMessage(toolResults...))
-	}
-
-	return &PipeResponse[[]anthropic.MessageParam]{
-		Messages:     msgs,
-		FinishReason: finalReason,
-	}, stream.Err()
 }

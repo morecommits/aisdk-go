@@ -41,7 +41,15 @@ func run(ctx context.Context) error {
 		Backend: genai.BackendGeminiAPI,
 	})
 
+	var lastMessages []aisdk.Message
+
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/dump", func(w http.ResponseWriter, r *http.Request) {
+		data, _ := json.MarshalIndent(lastMessages, "", "  ")
+		os.WriteFile("dump.json", data, 0644)
+		w.WriteHeader(http.StatusOK)
+		fmt.Printf("dumped to dump.json\n")
+	})
 	mux.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			aisdk.Chat
@@ -55,157 +63,123 @@ func run(ctx context.Context) error {
 			return
 		}
 
-		opts := &aisdk.PipeOptions{
-			HandleToolCall: func(toolCall aisdk.ToolCall) any {
-				return map[string]string{
-					"message": "It worked!",
-				}
-			},
+		handleToolCall := func(toolCall aisdk.ToolCall) any {
+			return map[string]string{
+				"message": "It worked!",
+			}
 		}
-
-		dataStream := aisdk.NewDataStream(w)
 
 		tools := []aisdk.Tool{{
 			Name:        "test",
 			Description: "A test tool. Only use if the user explicitly requests it.",
-			Parameters: map[string]any{
-				"message": map[string]string{
-					"type": "string",
+			Schema: aisdk.Schema{
+				Required: []string{"message"},
+				Properties: map[string]any{
+					"message": map[string]any{
+						"type": "string",
+					},
 				},
 			},
 		}}
 
-		switch req.Provider {
-		case "openai":
-			messages, err := aisdk.MessagesToOpenAI(req.Messages)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
+		aisdk.WriteDataStreamHeaders(w)
 
-			reasoningEffort := openai.ReasoningEffort("")
-			if req.Thinking {
-				reasoningEffort = openai.ReasoningEffortMedium
-			}
+		for {
+			var stream aisdk.DataStream
+			switch req.Provider {
+			case "openai":
+				messages, err := aisdk.MessagesToOpenAI(req.Messages)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 
-			for {
-				stream := openAIClient.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
+				reasoningEffort := openai.ReasoningEffort("")
+				if req.Thinking {
+					reasoningEffort = openai.ReasoningEffortMedium
+				}
+				stream = aisdk.OpenAIToDataStream(openAIClient.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
 					Model:               req.Model,
 					Messages:            messages,
 					ReasoningEffort:     reasoningEffort,
 					Tools:               aisdk.ToolsToOpenAI(tools),
 					MaxCompletionTokens: openai.Int(2048),
-				})
-				response, err := aisdk.PipeOpenAIToDataStream(stream, dataStream, opts)
-				if err != nil {
-					dataStream.Write(aisdk.ErrorStreamPart{
-						Content: fmt.Sprintf("Error: %s", err),
-					})
-					return
-				}
-
-				something, err := aisdk.OpenAIToMessages(response.Messages)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				rmsgs, err := aisdk.MessagesToOpenAI(something)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-
-				messages = append(messages, rmsgs...)
-				if response.FinishReason == aisdk.FinishReasonToolCalls {
-					continue
-				}
+				}))
 				break
-			}
-			break
-		case "anthropic":
-			messages, system, err := aisdk.MessagesToAnthropic(req.Messages)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			for {
-				dataStream.Write(aisdk.StartStepStreamPart{
-					MessageID: req.ID,
-				})
+			case "anthropic":
+				messages, system, err := aisdk.MessagesToAnthropic(req.Messages)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 
 				thinking := anthropic.ThinkingConfigParamUnion{}
 				if req.Thinking {
 					thinking = anthropic.ThinkingConfigParamOfThinkingConfigEnabled(2048)
 				}
-
-				stream := anthropicClient.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
+				stream = aisdk.AnthropicToDataStream(anthropicClient.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 					Model:     req.Model,
 					Messages:  messages,
 					System:    system,
 					MaxTokens: 4096,
 					Thinking:  thinking,
 					Tools:     aisdk.ToolsToAnthropic(tools),
-				})
-				response, err := aisdk.PipeAnthropicToDataStream(stream, dataStream, opts)
+				}))
+				break
+			case "google":
+				messages, err := aisdk.MessagesToGoogle(req.Messages)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
-				messages = append(messages, response.Messages...)
-				if response.FinishReason == aisdk.FinishReasonToolCalls {
-					continue
+
+				var thinkingConfig *genai.ThinkingConfig
+				if req.Thinking {
+					thinkingConfig = &genai.ThinkingConfig{
+						IncludeThoughts: true,
+					}
 				}
-				break
-			}
-
-			break
-		case "google":
-			messages, err := aisdk.MessagesToGoogle(req.Messages)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			var thinkingConfig *genai.ThinkingConfig
-			if req.Thinking {
-				thinkingConfig = &genai.ThinkingConfig{
-					IncludeThoughts: true,
-				}
-			}
-
-			tools, err := aisdk.ToolsToGoogle(tools)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			for {
-				stream := googleClient.Models.GenerateContentStream(ctx, req.Model, messages, &genai.GenerateContentConfig{
-					Tools:          tools,
-					ThinkingConfig: thinkingConfig,
-				})
-
-				response, err := aisdk.PipeGoogleToDataStream(stream, dataStream, opts)
+				tools, err := aisdk.ToolsToGoogle(tools)
 				if err != nil {
-					dataStream.Write(aisdk.ErrorStreamPart{
-						Content: fmt.Sprintf("Error: %s", err),
-					})
+					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
-				messages = append(messages, response.Messages...)
-
-				if response.FinishReason == aisdk.FinishReasonToolCalls {
-					continue
-				}
+				stream = aisdk.GoogleToDataStream(googleClient.Models.GenerateContentStream(ctx, req.Model, messages, &genai.GenerateContentConfig{
+					Tools:          tools,
+					ThinkingConfig: thinkingConfig,
+				}))
 				break
 			}
+			if stream == nil {
+				http.Error(w, "invalid provider", http.StatusBadRequest)
+				return
+			}
+			var acc aisdk.DataStreamAccumulator
+			stream = stream.WithToolCalling(handleToolCall)
+			stream = stream.WithAccumulator(&acc)
 
+			// Add system message if not present
+			if len(req.Messages) == 0 || req.Messages[0].Role != "system" {
+				req.Messages = append([]aisdk.Message{{
+					Role:    "system",
+					Content: "You are a helpful assistant. When using tools, always provide a text response after receiving the tool result to describe what happened. Do not make additional tool calls unless explicitly requested by the user.",
+				}}, req.Messages...)
+			}
+
+			err = stream.Pipe(w)
+			if err != nil {
+				log.Println(err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			req.Messages = append(req.Messages, acc.Messages()...)
+			lastMessages = req.Messages[:]
+			if acc.FinishReason() == aisdk.FinishReasonToolCalls {
+				continue
+			}
 			break
-		default:
-			http.Error(w, "invalid provider", http.StatusBadRequest)
-			return
 		}
+
 	})
 
 	return http.Serve(listener, mux)

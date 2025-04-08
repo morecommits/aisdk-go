@@ -40,6 +40,7 @@ const Chat = () => {
             </option>
           ))}
         </select>
+        <button onClick={() => fetch("/api/dump")}>Dump Messages Struct</button>
       </div>
 
       <div style={{ marginTop: "10px" }}>
