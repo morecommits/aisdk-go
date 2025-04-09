@@ -13,8 +13,12 @@ func ToolsToAnthropic(tools []Tool) []anthropic.ToolUnionParam {
 	anthropicTools := []anthropic.ToolUnionParam{}
 	for _, tool := range tools {
 		// Construct the ToolInputSchemaParam struct directly
+		properties := tool.Schema.Properties
+		if properties == nil {
+			properties = make(map[string]interface{})
+		}
 		inputSchema := anthropic.ToolInputSchemaParam{
-			Properties: tool.Schema.Properties, // Assuming Properties is map[string]interface{}
+			Properties: properties, // Assuming Properties is map[string]interface{}
 			// Type defaults to "object" via omitempty / SDK marshalling if needed
 		}
 		// Add required fields if they exist

@@ -18,7 +18,9 @@ func ToolsToOpenAI(tools []Tool) []openai.ChatCompletionToolParam {
 			schemaParams = map[string]any{
 				"type":       "object",
 				"properties": tool.Schema.Properties,
-				"required":   tool.Schema.Required,
+			}
+			if len(tool.Schema.Required) > 0 {
+				schemaParams["required"] = tool.Schema.Required
 			}
 		}
 		openaiTools = append(openaiTools, openai.ChatCompletionToolParam{
@@ -193,6 +195,22 @@ func OpenAIToDataStream(stream *ssestream.Stream[openai.ChatCompletionChunk]) Da
 					}, nil) {
 						return
 					}
+				}
+			}
+
+			if choice.FinishReason != "" {
+				var finishReason FinishReason
+				switch choice.FinishReason {
+				case "tool_calls":
+					finishReason = FinishReasonToolCalls
+				default:
+					finishReason = FinishReasonStop
+				}
+				if !yield(FinishStepStreamPart{
+					IsContinued:  false,
+					FinishReason: finishReason,
+				}, nil) {
+					return
 				}
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"strings"
 
 	"github.com/google/uuid"
 	"google.golang.org/genai"
@@ -17,6 +18,51 @@ type GoogleStreamIterator interface {
 
 func ToolsToGoogle(tools []Tool) ([]*genai.Tool, error) {
 	googleTools := []*genai.Tool{}
+
+	var propertyToSchema func(property map[string]any) (*genai.Schema, error)
+	propertyToSchema = func(property map[string]any) (*genai.Schema, error) {
+		schema := &genai.Schema{}
+
+		typeRaw, ok := property["type"]
+		if ok {
+			typ, ok := typeRaw.(string)
+			if !ok {
+				return nil, fmt.Errorf("type is not a string: %T", typeRaw)
+			}
+			schema.Type = genai.Type(strings.ToUpper(typ))
+		}
+
+		descriptionRaw, ok := property["description"]
+		if ok {
+			description, ok := descriptionRaw.(string)
+			if !ok {
+				return nil, fmt.Errorf("description is not a string: %T", descriptionRaw)
+			}
+			schema.Description = description
+		}
+
+		propertiesRaw, ok := property["properties"]
+		if ok {
+			properties, ok := propertiesRaw.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("properties is not a map[string]any: %T", propertiesRaw)
+			}
+			for key, value := range properties {
+				propMap, ok := value.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("property %q is not a map[string]any: %T", key, value)
+				}
+				subschema, err := propertyToSchema(propMap)
+				if err != nil {
+					return nil, fmt.Errorf("property %q has non-object properties: %w", key, err)
+				}
+				schema.Properties[key] = subschema
+			}
+		}
+
+		return schema, nil
+	}
+
 	for _, tool := range tools {
 		var schema *genai.Schema
 		if tool.Schema.Properties != nil {
@@ -26,62 +72,16 @@ func ToolsToGoogle(tools []Tool) ([]*genai.Tool, error) {
 				Required:   tool.Schema.Required,
 			}
 
-			// Convert properties
-			for propName, propSchema := range tool.Schema.Properties {
-				// Handle both simple type strings and complex objects
-				var propMap map[string]any
-				switch ps := propSchema.(type) {
-				case map[string]any:
-					propMap = ps
-				case map[string]string:
-					// Convert map[string]string to map[string]any
-					propMap = make(map[string]any, len(ps))
-					for k, v := range ps {
-						propMap[k] = v
-					}
-				case string:
-					// Handle simple type string (convert to a type definition)
-					propMap = map[string]any{"type": ps}
-				default:
-					return nil, fmt.Errorf("property %q has unsupported schema type %T", propName, propSchema)
-				}
-
-				// Get the type
-				typeStr, ok := propMap["type"].(string)
+			for key, value := range tool.Schema.Properties {
+				propMap, ok := value.(map[string]any)
 				if !ok {
-					return nil, fmt.Errorf("property %q missing type field", propName)
+					return nil, fmt.Errorf("property %q is not a map[string]any: %T", key, value)
 				}
-
-				prop := &genai.Schema{}
-				switch typeStr {
-				case "string":
-					prop.Type = genai.TypeString
-				case "number":
-					prop.Type = genai.TypeNumber
-				case "integer":
-					prop.Type = genai.TypeInteger
-				case "boolean":
-					prop.Type = genai.TypeBoolean
-				case "array":
-					prop.Type = genai.TypeArray
-				case "object":
-					prop.Type = genai.TypeObject
-				default:
-					return nil, fmt.Errorf("property %q has unsupported type %q", propName, typeStr)
+				subschema, err := propertyToSchema(propMap)
+				if err != nil {
+					return nil, fmt.Errorf("property %q has non-object properties: %w", key, err)
 				}
-
-				// Copy over common fields if they exist
-				if desc, ok := propMap["description"].(string); ok {
-					prop.Description = desc
-				}
-				if enum, ok := propMap["enum"].([]any); ok {
-					prop.Enum = make([]string, len(enum))
-					for i, e := range enum {
-						prop.Enum[i] = fmt.Sprintf("%v", e)
-					}
-				}
-
-				schema.Properties[propName] = prop
+				schema.Properties[key] = subschema
 			}
 		}
 
@@ -323,10 +323,6 @@ func GoogleToDataStream(stream iter.Seq2[*genai.GenerateContentResponse, error])
 						}, nil) {
 							return
 						}
-						if !yield(ErrorStreamPart{Content: fmt.Sprintf("failed to marshal function call args for %s: %s", fc.Name, err)}, nil) {
-							return
-						}
-						continue
 					}
 
 					finalReason = FinishReasonToolCalls
