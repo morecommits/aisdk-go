@@ -17,7 +17,7 @@ type GoogleStreamIterator interface {
 }
 
 func ToolsToGoogle(tools []Tool) ([]*genai.Tool, error) {
-	googleTools := []*genai.Tool{}
+	functionDeclarations := []*genai.FunctionDeclaration{}
 
 	var propertyToSchema func(property map[string]any) (*genai.Schema, error)
 	propertyToSchema = func(property map[string]any) (*genai.Schema, error) {
@@ -85,17 +85,15 @@ func ToolsToGoogle(tools []Tool) ([]*genai.Tool, error) {
 			}
 		}
 
-		googleTools = append(googleTools, &genai.Tool{
-			FunctionDeclarations: []*genai.FunctionDeclaration{
-				{
-					Name:        tool.Name,
-					Description: tool.Description,
-					Parameters:  schema,
-				},
-			},
+		functionDeclarations = append(functionDeclarations, &genai.FunctionDeclaration{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  schema,
 		})
 	}
-	return googleTools, nil
+	return []*genai.Tool{{
+		FunctionDeclarations: functionDeclarations,
+	}}, nil
 }
 
 // MessagesToGoogle converts internal message format to Google's genai.Content slice.
