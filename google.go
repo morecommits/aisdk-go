@@ -60,6 +60,19 @@ func ToolsToGoogle(tools []Tool) ([]*genai.Tool, error) {
 			}
 		}
 
+		itemsRaw, ok := property["items"]
+		if ok {
+			items, ok := itemsRaw.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("items is not a map[string]any: %T", itemsRaw)
+			}
+			subschema, err := propertyToSchema(items)
+			if err != nil {
+				return nil, fmt.Errorf("items has non-object properties: %w", err)
+			}
+			schema.Items = subschema
+		}
+
 		return schema, nil
 	}
 
