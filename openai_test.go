@@ -66,7 +66,7 @@ data: [DONE]`
 	// 3. Pass the typed stream to OpenAIToDataStream and accumulate results
 	var acc aisdk.DataStreamAccumulator
 	stream := aisdk.OpenAIToDataStream(typedStream)
-	stream = stream.WithToolCalling(func(toolCall aisdk.ToolCall) any {
+	stream = stream.WithToolCalling(func(toolCall aisdk.ToolCall) aisdk.ToolCallResult {
 		return map[string]any{"message": "Message printed to the console"}
 	})
 	stream = stream.WithAccumulator(&acc) // Accumulator is attached here
@@ -128,7 +128,7 @@ data: [DONE]`
 	toolMsg := toOpenAI[1].OfTool
 	require.NotNil(t, toolMsg)
 	require.Equal(t, "call_acK2pxwOef03RhfTFTbuPTkR", toolMsg.ToolCallID)
-	require.Equal(t, `{"message":"Message printed to the console"}`, toolMsg.Content.OfString.Value)
+	require.Equal(t, `{"message":"Message printed to the console"}`, toolMsg.Content.OfArrayOfContentParts[0].Text)
 }
 
 func TestMessagesToOpenAI_Live(t *testing.T) {

@@ -14,6 +14,7 @@ type model = keyof typeof modelToProvider;
 const Chat = () => {
   const [model, setModel] = useState<model>("gpt-4o");
   const [thinking, setThinking] = useState(false);
+  const [files, setFiles] = useState<FileList | null>(null);
   const { messages, input, handleInputChange, handleSubmit, error } = useChat({
     api: "/api/chat",
     body: {
@@ -22,6 +23,17 @@ const Chat = () => {
       thinking,
     },
   });
+
+  const handleSubmitWithFiles = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (files) {
+      handleSubmit(e, {
+        experimental_attachments: files,
+      });
+    } else {
+      handleSubmit(e);
+    }
+  };
 
   console.log(messages);
 
@@ -163,7 +175,12 @@ const Chat = () => {
         })}
       </div>
 
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={handleSubmitWithFiles}>
+        <input
+          type="file"
+          multiple
+          onChange={(e) => setFiles(e.target.files || null)}
+        />
         <input
           value={input}
           onChange={handleInputChange}

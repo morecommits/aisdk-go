@@ -19,7 +19,7 @@ type Chat struct {
 type DataStream iter.Seq2[DataStreamPart, error]
 
 // WithToolCalling passes tool calls to the handleToolCall function.
-func (s DataStream) WithToolCalling(handleToolCall func(toolCall ToolCall) any) DataStream {
+func (s DataStream) WithToolCalling(handleToolCall func(toolCall ToolCall) ToolCallResult) DataStream {
 	return func(yield func(DataStreamPart, error) bool) {
 		// Track partial tool calls by ID
 		partialToolCalls := make(map[string]struct {
@@ -240,7 +240,7 @@ func (p SourceStreamPart) Format() (string, error) {
 
 // FileStreamPart corresponds to TYPE_ID 'k'.
 type FileStreamPart struct {
-	Data     string `json:"data"`
+	Data     []byte `json:"data"`
 	MimeType string `json:"mimeType"`
 }
 
@@ -298,6 +298,10 @@ type ToolCall struct {
 	Args map[string]any `json:"args"`
 }
 
+type ToolCallResult interface {
+	Part | []Part | any
+}
+
 // ToolCallStartStreamPart corresponds to TYPE_ID 'b'.
 type ToolCallStartStreamPart struct {
 	ToolCallID string `json:"toolCallId"`
@@ -334,8 +338,8 @@ func (p ToolCallStreamPart) Format() (string, error) {
 
 // ToolResultStreamPart corresponds to TYPE_ID 'a'.
 type ToolResultStreamPart struct {
-	ToolCallID string `json:"toolCallId"`
-	Result     any    `json:"result"`
+	ToolCallID string         `json:"toolCallId"`
+	Result     ToolCallResult `json:"result"`
 }
 
 func (p ToolResultStreamPart) TypeID() byte { return 'a' }
@@ -462,7 +466,7 @@ type Part struct {
 
 	// Type: "file"
 	MimeType string `json:"mimeType,omitempty"`
-	Data     string `json:"data,omitempty"`
+	Data     []byte `json:"data,omitempty"`
 
 	// Type: "step-start" - No additional fields
 
@@ -494,7 +498,7 @@ type ToolInvocation struct {
 	ToolCallID string              `json:"toolCallId"`
 	ToolName   string              `json:"toolName"`
 	Args       any                 `json:"args"`
-	Result     any                 `json:"result,omitempty"`
+	Result     ToolCallResult      `json:"result,omitempty"`
 }
 
 func WriteDataStreamHeaders(w http.ResponseWriter) {
@@ -763,4 +767,19 @@ func (a *DataStreamAccumulator) FinishReason() FinishReason {
 
 func (a *DataStreamAccumulator) Usage() Usage {
 	return a.usage
+}
+
+func toolResultToParts(result ToolCallResult) ([]Part, error) {
+	switch r := result.(type) {
+	case []Part:
+		return r, nil
+	case Part:
+		return []Part{r}, nil
+	default:
+		jsonData, err := json.Marshal(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal tool call result: %w", err)
+		}
+		return []Part{{Type: PartTypeText, Text: string(jsonData)}}, nil
+	}
 }

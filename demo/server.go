@@ -63,7 +63,7 @@ func run(ctx context.Context) error {
 			return
 		}
 
-		handleToolCall := func(toolCall aisdk.ToolCall) any {
+		handleToolCall := func(toolCall aisdk.ToolCall) aisdk.ToolCallResult {
 			return map[string]string{
 				"message": "It worked!",
 			}

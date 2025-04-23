@@ -1,8 +1,10 @@
 package aisdk
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
@@ -48,156 +50,158 @@ func ToolsToAnthropic(tools []Tool) []anthropic.ToolUnionParam {
 // and user tool_result blocks.
 func MessagesToAnthropic(messages []Message) ([]anthropic.MessageParam, []anthropic.TextBlockParam, error) {
 	anthropicMessages := []anthropic.MessageParam{}
-	systemPrompts := []anthropic.TextBlockParam{}
 
-	// Iterate through messages and process them
-	for i := 0; i < len(messages); i++ {
-		message := messages[i]
+	var systemPrompt []anthropic.TextBlockParam
 
-		if message.Role == "system" {
-			// Handle system messages
-			systemPrompts = append(systemPrompts, anthropic.TextBlockParam{Text: message.Content})
+	for _, message := range messages {
+		role := anthropic.MessageParamRoleAssistant
+		content := []anthropic.ContentBlockParamUnion{}
+
+		switch message.Role {
+		case "system":
+			if len(systemPrompt) > 0 {
+				return nil, nil, fmt.Errorf("multiple system messages found")
+			}
 			for _, part := range message.Parts {
 				if part.Type == PartTypeText && part.Text != "" {
-					systemPrompts = append(systemPrompts, anthropic.TextBlockParam{Text: part.Text})
+					systemPrompt = append(systemPrompt, anthropic.TextBlockParam{
+						Text: part.Text,
+					})
 				}
-				// Ignore other parts in system messages for now
 			}
-			continue
-		}
-
-		var role anthropic.MessageParamRole
-		var currentContent []anthropic.ContentBlockParamUnion
-
-		if message.Role == "assistant" {
-			role = anthropic.MessageParamRoleAssistant
-			// Process parts for assistant message
+			break
+		case "assistant":
 			for _, part := range message.Parts {
 				switch part.Type {
 				case PartTypeText:
-					if part.Text != "" {
-						currentContent = append(currentContent, anthropic.ContentBlockParamUnion{
-							OfRequestTextBlock: &anthropic.TextBlockParam{Text: part.Text},
-						})
-					}
+					content = append(content, anthropic.ContentBlockParamUnion{
+						OfRequestTextBlock: &anthropic.TextBlockParam{
+							Text: part.Text,
+						},
+					})
 				case PartTypeToolInvocation:
 					if part.ToolInvocation == nil {
 						return nil, nil, fmt.Errorf("assistant message part has type tool-invocation but nil ToolInvocation field (ID: %s)", message.ID)
 					}
-
-					// Add the tool *call* part
 					argsJSON, err := json.Marshal(part.ToolInvocation.Args)
 					if err != nil {
 						return nil, nil, fmt.Errorf("marshalling tool input for call %s: %w", part.ToolInvocation.ToolCallID, err)
 					}
-					currentContent = append(currentContent, anthropic.ContentBlockParamUnion{
+					content = append(content, anthropic.ContentBlockParamUnion{
 						OfRequestToolUseBlock: &anthropic.ToolUseBlockParam{
 							ID:    part.ToolInvocation.ToolCallID,
-							Name:  part.ToolInvocation.ToolName,
 							Input: json.RawMessage(argsJSON),
+							Name:  part.ToolInvocation.ToolName,
 						},
 					})
 
-					// If the state is Result, we need to immediately add a user message with the result
-					if part.ToolInvocation.State == ToolInvocationStateResult {
-						// Flush the current assistant message first
-						if len(currentContent) > 0 {
-							anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
-								Role:    role,
-								Content: currentContent,
-							})
-							currentContent = nil // Reset for the potential next message
-						}
+					if part.ToolInvocation.State != ToolInvocationStateResult {
+						continue
+					}
 
-						// Now create the user message with the tool result
-						resultBytes, err := json.Marshal(part.ToolInvocation.Result)
-						if err != nil {
-							return nil, nil, fmt.Errorf("marshalling tool result for call %s: %w", part.ToolInvocation.ToolCallID, err)
-						}
-						userResultContent := []anthropic.ContentBlockParamUnion{
-							{
-								OfRequestToolResultBlock: &anthropic.ToolResultBlockParam{
-									ToolUseID: part.ToolInvocation.ToolCallID,
-									Content: []anthropic.ToolResultBlockParamContentUnion{
-										{
-											OfRequestTextBlock: &anthropic.TextBlockParam{Text: string(resultBytes)},
+					// Tool Results are sent as a separate message, so we need to flush existing content here.
+					anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
+						Role:    role,
+						Content: content,
+					})
+					content = nil
+
+					resultContent := []anthropic.ToolResultBlockParamContentUnion{}
+					resultParts, err := toolResultToParts(part.ToolInvocation.Result)
+					if err != nil {
+						return nil, nil, fmt.Errorf("failed to convert tool call result to parts: %w", err)
+					}
+					for _, resultPart := range resultParts {
+						switch resultPart.Type {
+						case PartTypeText:
+							resultContent = append(resultContent, anthropic.ToolResultBlockParamContentUnion{
+								OfRequestTextBlock: &anthropic.TextBlockParam{Text: resultPart.Text},
+							})
+						case PartTypeFile:
+							resultContent = append(resultContent, anthropic.ToolResultBlockParamContentUnion{
+								OfRequestImageBlock: &anthropic.ImageBlockParam{
+									Source: anthropic.ImageBlockParamSourceUnion{
+										OfBase64ImageSource: &anthropic.Base64ImageSourceParam{
+											Data:      base64.StdEncoding.EncodeToString(resultPart.Data),
+											MediaType: anthropic.Base64ImageSourceMediaType(resultPart.MimeType),
 										},
 									},
 								},
-							},
+							})
 						}
-						anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
-							Role:    anthropic.MessageParamRoleUser, // Result must be in user role
-							Content: userResultContent,
-						})
-						// Since we added the user message, effectively skip adding the current assistant message later
-						role = "" // Mark role as processed
 					}
-					// TODO: Add support for other part types
-				}
-			}
-		} else if message.Role == "user" || message.Role == "tool" {
-			role = anthropic.MessageParamRoleUser
-			// Process parts for user/tool message
-			for _, part := range message.Parts {
-				switch part.Type {
-				case PartTypeText:
-					if part.Text != "" {
-						currentContent = append(currentContent, anthropic.ContentBlockParamUnion{
-							OfRequestTextBlock: &anthropic.TextBlockParam{Text: part.Text},
-						})
-					}
-				case PartTypeToolInvocation:
-					if part.ToolInvocation == nil {
-						return nil, nil, fmt.Errorf("user/tool message part has type tool-invocation but nil ToolInvocation field (ID: %s)", message.ID)
-					}
-					// User/tool role should only contain results
-					if part.ToolInvocation.State != ToolInvocationStateResult {
-						return nil, nil, fmt.Errorf("non-result tool invocation found in user/tool message (ID: %s, State: %s)", message.ID, part.ToolInvocation.State)
-					}
-					resultBytes, err := json.Marshal(part.ToolInvocation.Result)
-					if err != nil {
-						return nil, nil, fmt.Errorf("marshalling tool result for call %s: %w", part.ToolInvocation.ToolCallID, err)
-					}
-					currentContent = append(currentContent, anthropic.ContentBlockParamUnion{
-						OfRequestToolResultBlock: &anthropic.ToolResultBlockParam{
-							ToolUseID: part.ToolInvocation.ToolCallID,
-							Content: []anthropic.ToolResultBlockParamContentUnion{
-								{
-									OfRequestTextBlock: &anthropic.TextBlockParam{Text: string(resultBytes)},
+
+					// Send the tool result as a separate message with the role as user.
+					anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
+						Role: anthropic.MessageParamRoleUser,
+						Content: []anthropic.ContentBlockParamUnion{
+							{
+								OfRequestToolResultBlock: &anthropic.ToolResultBlockParam{
+									ToolUseID: part.ToolInvocation.ToolCallID,
+									Content:   resultContent,
 								},
 							},
 						},
 					})
-					// TODO: Add support for other part types
+					content = nil
 				}
 			}
-			// Add plain content as text block if no parts were processed
-			if len(currentContent) == 0 && message.Content != "" {
-				currentContent = append(currentContent, anthropic.ContentBlockParamUnion{
-					OfRequestTextBlock: &anthropic.TextBlockParam{Text: message.Content},
-				})
+		case "user":
+			role = anthropic.MessageParamRoleUser
+			for _, part := range message.Parts {
+				switch part.Type {
+				case PartTypeText:
+					content = append(content, anthropic.ContentBlockParamUnion{
+						OfRequestTextBlock: &anthropic.TextBlockParam{Text: part.Text},
+					})
+				case PartTypeFile:
+					content = append(content, anthropic.ContentBlockParamUnion{
+						OfRequestImageBlock: &anthropic.ImageBlockParam{
+							Source: anthropic.ImageBlockParamSourceUnion{
+								OfBase64ImageSource: &anthropic.Base64ImageSourceParam{
+									Data:      base64.StdEncoding.EncodeToString(part.Data),
+									MediaType: anthropic.Base64ImageSourceMediaType(part.MimeType),
+								},
+							},
+						},
+					})
+				case PartTypeToolInvocation:
+					return nil, nil, fmt.Errorf("user message part has type tool-invocation (ID: %s)", message.ID)
+				}
 			}
-		} else {
+		default:
 			return nil, nil, fmt.Errorf("unsupported message role encountered: %s", message.Role)
 		}
 
-		// Add the processed message if it has content and role wasn't handled by tool result splitting
-		if len(currentContent) > 0 && role != "" {
-			// Check if the last message was of the same role, if so, merge content
-			lastIdx := len(anthropicMessages) - 1
-			if lastIdx >= 0 && anthropicMessages[lastIdx].Role == role {
-				anthropicMessages[lastIdx].Content = append(anthropicMessages[lastIdx].Content, currentContent...)
-			} else {
-				anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
-					Role:    role,
-					Content: currentContent,
+		if len(message.Attachments) > 0 {
+			for _, attachment := range message.Attachments {
+				// URLs typically have the mime prefixing as a URL.
+				parts := strings.SplitN(attachment.URL, ",", 2)
+				if len(parts) != 2 {
+					return nil, nil, fmt.Errorf("invalid attachment URL: %s", attachment.URL)
+				}
+				content = append(content, anthropic.ContentBlockParamUnion{
+					OfRequestImageBlock: &anthropic.ImageBlockParam{
+						Source: anthropic.ImageBlockParamSourceUnion{
+							OfBase64ImageSource: &anthropic.Base64ImageSourceParam{
+								Data:      parts[1],
+								MediaType: anthropic.Base64ImageSourceMediaType(attachment.ContentType),
+							},
+						},
+					},
 				})
 			}
 		}
+		if len(content) > 0 {
+			anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
+				Role:    role,
+				Content: content,
+			})
+			content = nil
+		}
 	}
 
-	return anthropicMessages, systemPrompts, nil
+	return anthropicMessages, systemPrompt, nil
 }
 
 // AnthropicToDataStream pipes an Anthropic stream to a DataStream.

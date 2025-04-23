@@ -1,6 +1,7 @@
 package aisdk
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 
@@ -40,101 +41,123 @@ func MessagesToOpenAI(messages []Message) ([]openai.ChatCompletionMessageParamUn
 
 	for _, message := range messages {
 		switch message.Role {
-		case "user":
-			// Handle simple text content
-			if len(message.Parts) == 1 && message.Parts[0].Type == PartTypeText {
-				contentUnion := openai.ChatCompletionUserMessageParamContentUnion{}
-				contentUnion.OfString = param.NewOpt(message.Parts[0].Text)
-				openaiMessages = append(openaiMessages, openai.ChatCompletionMessageParamUnion{
-					OfUser: &openai.ChatCompletionUserMessageParam{
-						Content: contentUnion,
-					},
-				})
-				continue
-			}
-
-			// For now, just use the message content for multi-part messages
-			// TODO: Support multi-modal content (images, files, etc.)
-			contentUnion := openai.ChatCompletionUserMessageParamContentUnion{}
-			contentUnion.OfString = param.NewOpt(message.Content)
-			openaiMessages = append(openaiMessages, openai.ChatCompletionMessageParamUnion{
-				OfUser: &openai.ChatCompletionUserMessageParam{
-					Content: contentUnion,
-				},
-			})
-
 		case "system":
 			openaiMessages = append(openaiMessages, openai.SystemMessage(message.Content))
+		case "user":
+			content := []openai.ChatCompletionContentPartUnionParam{}
+			for _, part := range message.Parts {
+				switch part.Type {
+				case PartTypeText:
+					content = append(content, openai.ChatCompletionContentPartUnionParam{
+						OfText: &openai.ChatCompletionContentPartTextParam{
+							Text: part.Text,
+						},
+					})
+				case PartTypeFile:
+					content = append(content, openai.ChatCompletionContentPartUnionParam{
+						OfImageURL: &openai.ChatCompletionContentPartImageParam{
+							ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+								URL: fmt.Sprintf("data:%s;base64,%s", part.MimeType, base64.StdEncoding.EncodeToString(part.Data)),
+							},
+						},
+					})
+				}
+			}
 
+			for _, attachment := range message.Attachments {
+				content = append(content, openai.ChatCompletionContentPartUnionParam{
+					OfImageURL: &openai.ChatCompletionContentPartImageParam{
+						ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+							URL: attachment.URL,
+						},
+					},
+				})
+			}
+
+			openaiMessages = append(openaiMessages, openai.ChatCompletionMessageParamUnion{
+				OfUser: &openai.ChatCompletionUserMessageParam{
+					Content: openai.ChatCompletionUserMessageParamContentUnion{
+						OfArrayOfContentParts: content,
+					},
+				},
+			})
 		case "assistant":
-			assistantMsg := openai.ChatCompletionAssistantMessageParam{}
-			toolCalls := make([]openai.ChatCompletionMessageToolCallParam, 0)
-			toolResults := make(map[string]json.RawMessage) // Store results temporarily
-			hasToolCalls := false
-			textContent := ""
+			content := &openai.ChatCompletionAssistantMessageParam{}
 
 			for _, part := range message.Parts {
 				switch part.Type {
 				case PartTypeText:
-					textContent += part.Text
+					content.Content.OfArrayOfContentParts = append(content.Content.OfArrayOfContentParts, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+						OfText: &openai.ChatCompletionContentPartTextParam{
+							Text: part.Text,
+						},
+					})
 				case PartTypeToolInvocation:
 					if part.ToolInvocation == nil {
 						return nil, fmt.Errorf("assistant message part has type tool-invocation but nil ToolInvocation field (ID: %s)", message.ID)
 					}
-
-					// Always create the tool call structure for the assistant message
 					argsJSON, err := json.Marshal(part.ToolInvocation.Args)
 					if err != nil {
 						return nil, fmt.Errorf("marshalling tool input for call %s: %w", part.ToolInvocation.ToolCallID, err)
 					}
-					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
+					content.ToolCalls = append(content.ToolCalls, openai.ChatCompletionMessageToolCallParam{
 						ID: part.ToolInvocation.ToolCallID,
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      part.ToolInvocation.ToolName,
 							Arguments: string(argsJSON),
 						},
 					})
-					hasToolCalls = true
 
-					// If the state includes a result, store it for a separate ToolMessage
-					if part.ToolInvocation.State == ToolInvocationStateResult {
-						resultBytes, err := json.Marshal(part.ToolInvocation.Result)
-						if err != nil {
-							return nil, fmt.Errorf("marshalling tool result for call %s: %w", part.ToolInvocation.ToolCallID, err)
-						}
-						toolResults[part.ToolInvocation.ToolCallID] = resultBytes
+					if part.ToolInvocation.State != ToolInvocationStateResult {
+						continue
 					}
-				}
-			}
 
-			contentUnion := openai.ChatCompletionAssistantMessageParamContentUnion{}
-			contentUnion.OfString = param.NewOpt(textContent)
-			assistantMsg.Content = contentUnion
+					openaiMessages = append(openaiMessages, openai.ChatCompletionMessageParamUnion{
+						OfAssistant: content,
+					})
+					content = &openai.ChatCompletionAssistantMessageParam{}
 
-			if hasToolCalls {
-				assistantMsg.ToolCalls = toolCalls
-			}
-			openaiMessages = append(openaiMessages, openai.ChatCompletionMessageParamUnion{OfAssistant: &assistantMsg})
+					parts := []openai.ChatCompletionContentPartTextParam{}
 
-			// Append ToolMessages for any results we found
-			for toolCallID, resultBytes := range toolResults {
-				openaiMessages = append(openaiMessages, openai.ToolMessage(string(resultBytes), toolCallID))
-			}
-
-		case "tool":
-			// Convert tool messages to OpenAI format
-			for _, part := range message.Parts {
-				if part.Type == PartTypeToolInvocation && part.ToolInvocation != nil && part.ToolInvocation.State == ToolInvocationStateResult {
-					resultBytes, err := json.Marshal(part.ToolInvocation.Result)
+					resultParts, err := toolResultToParts(part.ToolInvocation.Result)
 					if err != nil {
-						return nil, fmt.Errorf("marshalling tool result for call %s: %w", part.ToolInvocation.ToolCallID, err)
+						return nil, fmt.Errorf("failed to convert tool call result to parts: %w", err)
 					}
-					openaiMessages = append(openaiMessages, openai.ToolMessage(string(resultBytes), part.ToolInvocation.ToolCallID))
+					for _, resultPart := range resultParts {
+						switch resultPart.Type {
+						case PartTypeText:
+							parts = append(parts, openai.ChatCompletionContentPartTextParam{
+								Text: resultPart.Text,
+							})
+						case PartTypeFile:
+							// Unfortunately, OpenAI doesn't support file content in tool messages.
+							parts = append(parts, openai.ChatCompletionContentPartTextParam{
+								Text: "File content was provided as a tool result, but is not supported by OpenAI.",
+							})
+							continue
+						}
+					}
+
+					openaiMessages = append(openaiMessages, openai.ChatCompletionMessageParamUnion{
+						OfTool: &openai.ChatCompletionToolMessageParam{
+							ToolCallID: part.ToolInvocation.ToolCallID,
+							Content: openai.ChatCompletionToolMessageParamContentUnion{
+								OfArrayOfContentParts: parts,
+							},
+						},
+					})
 				}
 			}
 
-		default:
-			return nil, fmt.Errorf("unsupported message role encountered: %s", message.Role)
+			if len(content.Content.OfArrayOfContentParts) > 0 {
+				openaiMessages = append(openaiMessages, openai.ChatCompletionMessageParamUnion{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Content: openai.ChatCompletionAssistantMessageParamContentUnion{
+							OfArrayOfContentParts: content.Content.OfArrayOfContentParts,
+						},
+					},
+				})
+			}
 		}
 	}
 

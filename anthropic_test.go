@@ -75,7 +75,7 @@ data: {"type":"message_stop" }`
 
 	var acc aisdk.DataStreamAccumulator
 	stream := aisdk.AnthropicToDataStream(typedStream)
-	stream = stream.WithToolCalling(func(toolCall aisdk.ToolCall) any {
+	stream = stream.WithToolCalling(func(toolCall aisdk.ToolCall) aisdk.ToolCallResult {
 		return map[string]any{"message": "Message printed to the console"}
 	})
 	stream = stream.WithAccumulator(&acc)

@@ -1,6 +1,7 @@
 package aisdk
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -116,153 +117,110 @@ func MessagesToGoogle(messages []Message) ([]*genai.Content, error) {
 
 	for _, message := range messages {
 		switch message.Role {
-		case "user":
-			// TODO: Handle multi-modal user content via Parts
-			userContent := &genai.Content{
-				Role: "user",
-				// Ensure we create a slice of *pointers* to Part
-				Parts: []*genai.Part{{Text: message.Content}}, // Correctly make a Part and take its address implicitly via literal
-			}
-			googleContents = append(googleContents, userContent)
-
-		case "assistant": // Corresponds to 'model' role in Google AI
-			assistantParts := []*genai.Part{}
-			functionCallParts := []*genai.Part{}
-			functionResponseParts := []*genai.Part{} // Separate list for function responses
-
-			// First, add text content if it exists
-			if message.Content != "" {
-				assistantParts = append(assistantParts, &genai.Part{Text: message.Content}) // Take address
-			}
-
-			// Iterate through parts to find text, tool calls, and tool results
-			for _, part := range message.Parts {
-				switch part.Type {
-				case PartTypeText:
-					// If message.Content was empty but text parts exist, add them.
-					// Avoid duplicating if message.Content already added the text.
-					if message.Content == "" && part.Text != "" {
-						assistantParts = append(assistantParts, &genai.Part{Text: part.Text}) // Take address
-					}
-				case PartTypeToolInvocation:
-					if part.ToolInvocation == nil {
-						return nil, fmt.Errorf("assistant message part has type tool-invocation but nil ToolInvocation field (ID: %s)", message.ID)
-					}
-					if part.ToolInvocation.State == ToolInvocationStateCall || part.ToolInvocation.State == ToolInvocationStatePartialCall {
-						argsMap, ok := part.ToolInvocation.Args.(map[string]any)
-						if !ok && part.ToolInvocation.Args != nil { // Allow nil args
-							return nil, fmt.Errorf("tool call args for %s are not map[string]any: %T", part.ToolInvocation.ToolName, part.ToolInvocation.Args)
-						}
-						fc := genai.FunctionCall{
-							Name: part.ToolInvocation.ToolName,
-							Args: argsMap,
-						}
-						// Function calls belong in the 'model' role content
-						functionCallParts = append(functionCallParts, &genai.Part{FunctionCall: &fc}) // Take address
-					} else if part.ToolInvocation.State == ToolInvocationStateResult {
-						// Tool results require a separate 'function' role content block later
-						var resultMap map[string]any
-						switch v := part.ToolInvocation.Result.(type) {
-						case string:
-							// Attempt to unmarshal if it's a JSON string
-							err := json.Unmarshal([]byte(v), &resultMap)
-							if err != nil {
-								// If not valid JSON, treat it as a plain string result
-								resultMap = map[string]any{"result": v}
-							}
-						case nil:
-							resultMap = make(map[string]any) // Empty map for nil result
-						default:
-							// Attempt to marshal and unmarshal to get map[string]any
-							resultBytes, err := json.Marshal(v)
-							if err != nil {
-								return nil, fmt.Errorf("failed to marshal tool result for call %s: %w", part.ToolInvocation.ToolCallID, err)
-							}
-							err = json.Unmarshal(resultBytes, &resultMap)
-							if err != nil {
-								// Fallback: wrap non-JSON-object result in a map
-								resultMap = map[string]any{"result": v}
-							}
-						}
-
-						fr := genai.FunctionResponse{
-							Name:     part.ToolInvocation.ToolName,
-							Response: resultMap,
-						}
-						functionResponseParts = append(functionResponseParts, &genai.Part{FunctionResponse: &fr}) // Take address
-					}
-				}
-			}
-
-			// Append model content (text + function calls)
-			if len(assistantParts) > 0 || len(functionCallParts) > 0 {
-				modelContent := &genai.Content{
-					Role: "model",
-					// Combine the slices of pointers
-					Parts: append(assistantParts, functionCallParts...),
-				}
-				googleContents = append(googleContents, modelContent)
-			}
-
-			// Append function responses if any
-			if len(functionResponseParts) > 0 {
-				// Google expects function responses in a separate 'function' role message
-				functionContent := &genai.Content{
-					Role:  "function",            // Correct role for function responses
-					Parts: functionResponseParts, // Already a slice of pointers
-				}
-				googleContents = append(googleContents, functionContent)
-			}
-
 		case "system":
 			// System messages are ignored for Google's main message history.
 			// They are handled separately via SystemInstruction.
 
-		case "tool":
-			// This case handles messages that *only* contain tool results.
-			// Combine with the logic in 'assistant' case as Google expects
-			// function responses in a separate 'function' role message
-			// following the 'model' message that contained the call.
-			functionResponseParts := []*genai.Part{}
-			for _, part := range message.Parts {
-				if part.Type == PartTypeToolInvocation && part.ToolInvocation != nil && part.ToolInvocation.State == ToolInvocationStateResult {
-					var resultMap map[string]any
-					switch v := part.ToolInvocation.Result.(type) {
-					case string:
-						err := json.Unmarshal([]byte(v), &resultMap)
-						if err != nil {
-							resultMap = map[string]any{"result": v}
-						}
-					case nil:
-						resultMap = make(map[string]any)
-					default:
-						resultBytes, err := json.Marshal(v)
-						if err != nil {
-							return nil, fmt.Errorf("failed to marshal tool result for call %s: %w", part.ToolInvocation.ToolCallID, err)
-						}
-						err = json.Unmarshal(resultBytes, &resultMap)
-						if err != nil {
-							resultMap = map[string]any{"result": v}
-						}
-					}
-					fr := genai.FunctionResponse{
-						Name:     part.ToolInvocation.ToolName,
-						Response: resultMap,
-					}
-					functionResponseParts = append(functionResponseParts, &genai.Part{FunctionResponse: &fr}) // Take address
-				}
+		case "user":
+			content := &genai.Content{
+				Role: "user",
 			}
-			if len(functionResponseParts) > 0 {
-				functionContent := &genai.Content{
-					Role:  "function",
-					Parts: functionResponseParts, // Already a slice of pointers
+			for _, part := range message.Parts {
+				switch part.Type {
+				case PartTypeText:
+					content.Parts = append(content.Parts, &genai.Part{Text: part.Text})
+				case PartTypeFile:
+					content.Parts = append(content.Parts, &genai.Part{InlineData: &genai.Blob{
+						Data:     part.Data,
+						MIMEType: part.MimeType,
+					}})
 				}
-				googleContents = append(googleContents, functionContent)
-			} else {
-				// If a 'tool' role message has no ToolResult parts, it's an error or unexpected.
-				return nil, fmt.Errorf("tool message found without ToolResult parts (ID: %s)", message.ID)
 			}
 
+			for _, attachment := range message.Attachments {
+				parts := strings.SplitN(attachment.URL, ",", 2)
+				if len(parts) != 2 {
+					return nil, fmt.Errorf("invalid attachment URL: %s", attachment.URL)
+				}
+				decoded, err := base64.StdEncoding.DecodeString(parts[1])
+				if err != nil {
+					return nil, fmt.Errorf("failed to decode attachment: %w", err)
+				}
+				content.Parts = append(content.Parts, &genai.Part{InlineData: &genai.Blob{
+					Data:     decoded,
+					MIMEType: attachment.ContentType,
+				}})
+			}
+
+			googleContents = append(googleContents, content)
+		case "assistant":
+			content := &genai.Content{
+				Role: "model",
+			}
+			for _, part := range message.Parts {
+				switch part.Type {
+				case PartTypeText:
+					content.Parts = append(content.Parts, &genai.Part{
+						Text: part.Text,
+					})
+				case PartTypeToolInvocation:
+					if part.ToolInvocation == nil {
+						return nil, fmt.Errorf("assistant message part has type tool-invocation but nil ToolInvocation field (ID: %s)", message.ID)
+					}
+					argsMap, ok := part.ToolInvocation.Args.(map[string]any)
+					if !ok && part.ToolInvocation.Args != nil { // Allow nil args
+						return nil, fmt.Errorf("tool call args for %s are not map[string]any: %T", part.ToolInvocation.ToolName, part.ToolInvocation.Args)
+					}
+					fc := genai.FunctionCall{
+						ID:   part.ToolInvocation.ToolCallID,
+						Name: part.ToolInvocation.ToolName,
+						Args: argsMap,
+					}
+					content.Parts = append(content.Parts, &genai.Part{
+						FunctionCall: &fc,
+					})
+
+					if part.ToolInvocation.State != ToolInvocationStateResult {
+						continue
+					}
+
+					googleContents = append(googleContents, content)
+					content = &genai.Content{
+						Role: "model",
+					}
+
+					googleParts := []*genai.Part{}
+
+					parts, err := toolResultToParts(part.ToolInvocation.Result)
+					if err != nil {
+						return nil, fmt.Errorf("failed to convert tool call result to parts: %w", err)
+					}
+					for _, part := range parts {
+						switch part.Type {
+						case PartTypeText:
+							googleParts = append(googleParts, &genai.Part{
+								Text: part.Text,
+							})
+						case PartTypeFile:
+							googleParts = append(googleParts, &genai.Part{
+								InlineData: &genai.Blob{
+									Data:     part.Data,
+									MIMEType: part.MimeType,
+								}},
+							)
+						}
+					}
+
+					fr := genai.FunctionResponse{
+						Name:     part.ToolInvocation.ToolName,
+						ID:       part.ToolInvocation.ToolCallID,
+						Response: map[string]any{"output": googleParts},
+					}
+					content.Parts = append(content.Parts, &genai.Part{FunctionResponse: &fr})
+				}
+			}
+
+			googleContents = append(googleContents, content)
 		default:
 			return nil, fmt.Errorf("unsupported message role encountered: %s", message.Role)
 		}
