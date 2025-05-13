@@ -7,6 +7,27 @@
 > [!WARNING]  
 > This library is super new and may change a lot.
 
+## Features
+
+- Supports OpenAI, Google, and Anthropic (with Bedrock support)
+- Easy integration with `useChat`
+- Chain tool usage in Go, just like `maxSteps`
+- Streamlined data stream protocol implementation
+
+## Quick Start
+
+Install the package:
+
+```bash
+go get github.com/kylecarbs/aisdk-go
+```
+
+Use in your Go code:
+
+```go
+import "github.com/kylecarbs/aisdk-go"
+```
+
 A Go implementation of Vercel's AI SDK [Data Stream Protocol](https://sdk.vercel.ai/docs/ai-sdk-ui/stream-protocol#data-stream-example).
 
 - Supports OpenAI, Google, and Anthropic (with Bedrock support)
