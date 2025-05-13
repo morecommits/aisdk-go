@@ -1,4 +1,4 @@
-# Wow
+# Potato
 
 [![GitHub Release](https://img.shields.io/github/v/release/kylecarbs/aisdk-go?color=6b9ded&sort=semver)](https://github.com/kylecarbs/aisdk-go/releases)
 [![GoDoc](https://godoc.org/github.com/kylecarbs/aisdk-go?status.svg)](https://godoc.org/github.com/kylecarbs/aisdk-go)
