@@ -1,6 +1,6 @@
 module github.com/kylecarbs/aisdk-go
 
-go 1.23.7
+go 1.18
 
 require (
 	github.com/anthropics/anthropic-sdk-go v0.2.0-beta.3

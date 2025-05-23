@@ -123,7 +123,7 @@ func MessagesToGoogle(messages []Message) ([]*genai.Content, error) {
 
 		case "user":
 			content := &genai.Content{
-				Role: "user",
+				Role: genai.RoleUser,
 			}
 			for _, part := range message.Parts {
 				switch part.Type {
@@ -155,7 +155,7 @@ func MessagesToGoogle(messages []Message) ([]*genai.Content, error) {
 			googleContents = append(googleContents, content)
 		case "assistant":
 			content := &genai.Content{
-				Role: "model",
+				Role: genai.RoleModel,
 			}
 			for _, part := range message.Parts {
 				switch part.Type {

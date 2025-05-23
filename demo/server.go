@@ -36,10 +36,7 @@ func run(ctx context.Context) error {
 	openAIClient := openai.NewClient(openaioption.WithAPIKey(os.Getenv("OPENAI_API_KEY")))
 	anthropicClient := anthropic.NewClient(anthropicoption.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")))
 	// Ignore this error - the user might not use Google.
-	googleClient, _ := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  os.Getenv("GOOGLE_API_KEY"),
-		Backend: genai.BackendGeminiAPI,
-	})
+	googleClient, _ := genai.NewClient(ctx, genai.WithAPIKey(os.Getenv("GOOGLE_API_KEY")))
 
 	var lastMessages []aisdk.Message
 
@@ -136,7 +133,7 @@ func run(ctx context.Context) error {
 				var thinkingConfig *genai.ThinkingConfig
 				if req.Thinking {
 					thinkingConfig = &genai.ThinkingConfig{
-						IncludeThoughts: true,
+						Enabled: true,
 					}
 				}
 				tools, err := aisdk.ToolsToGoogle(tools)
@@ -144,7 +141,9 @@ func run(ctx context.Context) error {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
-				stream = aisdk.GoogleToDataStream(googleClient.Models.GenerateContentStream(ctx, req.Model, messages, &genai.GenerateContentConfig{
+				stream = aisdk.GoogleToDataStream(googleClient.GenerateContentStream(ctx, &genai.GenerateContentRequest{
+					Model:          req.Model,
+					Contents:       messages,
 					Tools:          tools,
 					ThinkingConfig: thinkingConfig,
 				}))
