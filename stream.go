@@ -498,7 +498,7 @@ type ToolInvocation struct {
 	ToolCallID string              `json:"toolCallId"`
 	ToolName   string              `json:"toolName"`
 	Args       any                 `json:"args"`
-	Result     ToolCallResult      `json:"result,omitempty"`
+	Result     any                 `json:"result,omitempty"`
 }
 
 func WriteDataStreamHeaders(w http.ResponseWriter) {

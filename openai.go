@@ -251,11 +251,11 @@ func OpenAIToDataStream(stream *ssestream.Stream[openai.ChatCompletionChunk]) Da
 				finishReason = FinishReasonStop
 			}
 
-			if lastChunk.Usage.JSON.CompletionTokens.IsPresent() {
+			if lastChunk.Usage.JSON.CompletionTokens.Valid() {
 				tokens := int64(lastChunk.Usage.CompletionTokens)
 				completionTokens = &tokens
 			}
-			if lastChunk.Usage.JSON.PromptTokens.IsPresent() {
+			if lastChunk.Usage.JSON.PromptTokens.Valid() {
 				tokens := int64(lastChunk.Usage.PromptTokens)
 				promptTokens = &tokens
 			}
