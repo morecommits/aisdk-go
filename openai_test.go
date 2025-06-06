@@ -66,7 +66,7 @@ data: [DONE]`
 	// 3. Pass the typed stream to OpenAIToDataStream and accumulate results
 	var acc aisdk.DataStreamAccumulator
 	stream := aisdk.OpenAIToDataStream(typedStream)
-	stream = stream.WithToolCalling(func(toolCall aisdk.ToolCall) aisdk.ToolCallResult {
+	stream = stream.WithToolCalling(func(toolCall aisdk.ToolCall) any {
 		return map[string]any{"message": "Message printed to the console"}
 	})
 	stream = stream.WithAccumulator(&acc) // Accumulator is attached here
