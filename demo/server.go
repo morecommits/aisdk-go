@@ -63,7 +63,7 @@ func run(ctx context.Context) error {
 			return
 		}
 
-		handleToolCall := func(toolCall aisdk.ToolCall) aisdk.ToolCallResult {
+		handleToolCall := func(toolCall aisdk.ToolCall) any {
 			return map[string]string{
 				"message": "It worked!",
 			}
@@ -115,10 +115,10 @@ func run(ctx context.Context) error {
 
 				thinking := anthropic.ThinkingConfigParamUnion{}
 				if req.Thinking {
-					thinking = anthropic.ThinkingConfigParamOfThinkingConfigEnabled(2048)
+					thinking = anthropic.ThinkingConfigParamOfEnabled(2048)
 				}
 				stream = aisdk.AnthropicToDataStream(anthropicClient.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
-					Model:     req.Model,
+					Model:     anthropic.Model(req.Model),
 					Messages:  messages,
 					System:    system,
 					MaxTokens: 4096,
