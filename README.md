@@ -1,8 +1,8 @@
 # aisdk-go
 
-[![GitHub Release](https://img.shields.io/github/v/release/kylecarbs/aisdk-go?color=6b9ded&sort=semver)](https://github.com/kylecarbs/aisdk-go/releases)
-[![GoDoc](https://godoc.org/github.com/kylecarbs/aisdk-go?status.svg)](https://godoc.org/github.com/kylecarbs/aisdk-go)
-[![CI Status](https://github.com/kylecarbs/aisdk-go/workflows/ci/badge.svg)](https://github.com/kylecarbs/aisdk-go/actions)
+[![GitHub Release](https://img.shields.io/github/v/release/coder/aisdk-go?color=6b9ded&sort=semver)](https://github.com/coder/aisdk-go/releases)
+[![GoDoc](https://godoc.org/github.com/coder/aisdk-go?status.svg)](https://godoc.org/github.com/coder/aisdk-go)
+[![CI Status](https://github.com/coder/aisdk-go/workflows/ci/badge.svg)](https://github.com/coder/aisdk-go/actions)
 
 > [!WARNING]  
 > This library is super new and may change a lot.

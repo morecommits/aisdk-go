@@ -12,7 +12,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
-	"github.com/kylecarbs/aisdk-go"
+	"github.com/coder/aisdk-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,7 +75,7 @@ data: {"type":"message_stop" }`
 
 	var acc aisdk.DataStreamAccumulator
 	stream := aisdk.AnthropicToDataStream(typedStream)
-	stream = stream.WithToolCalling(func(toolCall aisdk.ToolCall) aisdk.ToolCallResult {
+	stream = stream.WithToolCalling(func(toolCall aisdk.ToolCall) any {
 		return map[string]any{"message": "Message printed to the console"}
 	})
 	stream = stream.WithAccumulator(&acc)
@@ -123,12 +123,12 @@ data: {"type":"message_stop" }`
 	require.Len(t, assistantMsg.Content, 2) // Text block + ToolUse block
 
 	// Check Text Content Block
-	textBlock := assistantMsg.Content[0].OfRequestTextBlock
+	textBlock := assistantMsg.Content[0].OfText
 	require.NotNil(t, textBlock)
 	require.Equal(t, "I'll help you print 'hello world' to the console using the print function.", textBlock.Text)
 
 	// Check Tool Use Content Block
-	toolUseBlock := assistantMsg.Content[1].OfRequestToolUseBlock
+	toolUseBlock := assistantMsg.Content[1].OfToolUse
 	require.NotNil(t, toolUseBlock)
 	require.Equal(t, "toolu_01RA76iwg1LbKuDjJnc6ym45", toolUseBlock.ID)
 	require.Equal(t, "print", toolUseBlock.Name)
@@ -139,12 +139,12 @@ data: {"type":"message_stop" }`
 	require.Equal(t, anthropic.MessageParamRoleUser, userMsg.Role)
 	require.Len(t, userMsg.Content, 1) // ToolResult block
 
-	toolResultBlock := userMsg.Content[0].OfRequestToolResultBlock
+	toolResultBlock := userMsg.Content[0].OfToolResult
 	require.NotNil(t, toolResultBlock)
 	require.Equal(t, "toolu_01RA76iwg1LbKuDjJnc6ym45", toolResultBlock.ToolUseID)
 	require.Len(t, toolResultBlock.Content, 1)
-	require.NotNil(t, toolResultBlock.Content[0].OfRequestTextBlock)
-	require.JSONEq(t, `{"message":"Message printed to the console"}`, toolResultBlock.Content[0].OfRequestTextBlock.Text)
+	require.NotNil(t, toolResultBlock.Content[0].OfText)
+	require.JSONEq(t, `{"message":"Message printed to the console"}`, toolResultBlock.Content[0].OfText.Text)
 
 	// --- Second conversion check (using expectedMessages) ---
 	// This part should remain the same, as it also expects 2 messages now.
@@ -163,12 +163,12 @@ data: {"type":"message_stop" }`
 	require.Equal(t, anthropic.MessageParamRoleUser, userMsgWithResult.Role)
 	require.Len(t, userMsgWithResult.Content, 1) // ToolResult block
 
-	toolResultBlockWithResult := userMsgWithResult.Content[0].OfRequestToolResultBlock
+	toolResultBlockWithResult := userMsgWithResult.Content[0].OfToolResult
 	require.NotNil(t, toolResultBlockWithResult)
 	require.Equal(t, "toolu_01RA76iwg1LbKuDjJnc6ym45", toolResultBlockWithResult.ToolUseID)
 	require.Len(t, toolResultBlockWithResult.Content, 1)
-	require.NotNil(t, toolResultBlockWithResult.Content[0].OfRequestTextBlock)
-	require.JSONEq(t, `{"message":"Message printed to the console"}`, toolResultBlockWithResult.Content[0].OfRequestTextBlock.Text)
+	require.NotNil(t, toolResultBlockWithResult.Content[0].OfText)
+	require.JSONEq(t, `{"message":"Message printed to the console"}`, toolResultBlockWithResult.Content[0].OfText.Text)
 }
 
 func TestMessagesToAnthropic_Live(t *testing.T) {
@@ -181,15 +181,25 @@ func TestMessagesToAnthropic_Live(t *testing.T) {
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 
 	// Ensure messages are converted correctly.
+	prompt := "use the 'print' tool to print 'Hello, world!' and then show the result"
 	messages, systemPrompts, err := aisdk.MessagesToAnthropic([]aisdk.Message{
 		{
-			Role:    "system",
-			Content: "use the 'print' tool to print 'Hello, world!' and then show the result",
+			Role: "system",
+			Parts: []aisdk.Part{
+				{Text: "You are a helpful assistant.", Type: aisdk.PartTypeText},
+			},
 		},
 		{
-			Role: "user", Content: "Go ahead.",
+			Role: "user", Parts: []aisdk.Part{
+				{Text: prompt, Type: aisdk.PartTypeText},
+			},
 		},
 	})
+	require.Len(t, messages, 1)
+	require.Len(t, systemPrompts, 1)
+	require.Len(t, messages[0].Content, 1)
+	require.NotNil(t, messages[0].Content[0].OfText)
+	require.Equal(t, messages[0].Content[0].OfText.Text, prompt)
 	require.NoError(t, err)
 
 	stream := client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{

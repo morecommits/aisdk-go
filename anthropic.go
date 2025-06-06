@@ -75,7 +75,7 @@ func MessagesToAnthropic(messages []Message) ([]anthropic.MessageParam, []anthro
 				switch part.Type {
 				case PartTypeText:
 					content = append(content, anthropic.ContentBlockParamUnion{
-						OfRequestTextBlock: &anthropic.TextBlockParam{
+						OfText: &anthropic.TextBlockParam{
 							Text: part.Text,
 						},
 					})
@@ -88,7 +88,7 @@ func MessagesToAnthropic(messages []Message) ([]anthropic.MessageParam, []anthro
 						return nil, nil, fmt.Errorf("marshalling tool input for call %s: %w", part.ToolInvocation.ToolCallID, err)
 					}
 					content = append(content, anthropic.ContentBlockParamUnion{
-						OfRequestToolUseBlock: &anthropic.ToolUseBlockParam{
+						OfToolUse: &anthropic.ToolUseBlockParam{
 							ID:    part.ToolInvocation.ToolCallID,
 							Input: json.RawMessage(argsJSON),
 							Name:  part.ToolInvocation.ToolName,
@@ -115,13 +115,13 @@ func MessagesToAnthropic(messages []Message) ([]anthropic.MessageParam, []anthro
 						switch resultPart.Type {
 						case PartTypeText:
 							resultContent = append(resultContent, anthropic.ToolResultBlockParamContentUnion{
-								OfRequestTextBlock: &anthropic.TextBlockParam{Text: resultPart.Text},
+								OfText: &anthropic.TextBlockParam{Text: resultPart.Text},
 							})
 						case PartTypeFile:
 							resultContent = append(resultContent, anthropic.ToolResultBlockParamContentUnion{
-								OfRequestImageBlock: &anthropic.ImageBlockParam{
+								OfImage: &anthropic.ImageBlockParam{
 									Source: anthropic.ImageBlockParamSourceUnion{
-										OfBase64ImageSource: &anthropic.Base64ImageSourceParam{
+										OfBase64: &anthropic.Base64ImageSourceParam{
 											Data:      base64.StdEncoding.EncodeToString(resultPart.Data),
 											MediaType: anthropic.Base64ImageSourceMediaType(resultPart.MimeType),
 										},
@@ -136,7 +136,7 @@ func MessagesToAnthropic(messages []Message) ([]anthropic.MessageParam, []anthro
 						Role: anthropic.MessageParamRoleUser,
 						Content: []anthropic.ContentBlockParamUnion{
 							{
-								OfRequestToolResultBlock: &anthropic.ToolResultBlockParam{
+								OfToolResult: &anthropic.ToolResultBlockParam{
 									ToolUseID: part.ToolInvocation.ToolCallID,
 									Content:   resultContent,
 								},
@@ -152,13 +152,13 @@ func MessagesToAnthropic(messages []Message) ([]anthropic.MessageParam, []anthro
 				switch part.Type {
 				case PartTypeText:
 					content = append(content, anthropic.ContentBlockParamUnion{
-						OfRequestTextBlock: &anthropic.TextBlockParam{Text: part.Text},
+						OfText: &anthropic.TextBlockParam{Text: part.Text},
 					})
 				case PartTypeFile:
 					content = append(content, anthropic.ContentBlockParamUnion{
-						OfRequestImageBlock: &anthropic.ImageBlockParam{
+						OfImage: &anthropic.ImageBlockParam{
 							Source: anthropic.ImageBlockParamSourceUnion{
-								OfBase64ImageSource: &anthropic.Base64ImageSourceParam{
+								OfBase64: &anthropic.Base64ImageSourceParam{
 									Data:      base64.StdEncoding.EncodeToString(part.Data),
 									MediaType: anthropic.Base64ImageSourceMediaType(part.MimeType),
 								},
@@ -181,9 +181,9 @@ func MessagesToAnthropic(messages []Message) ([]anthropic.MessageParam, []anthro
 					return nil, nil, fmt.Errorf("invalid attachment URL: %s", attachment.URL)
 				}
 				content = append(content, anthropic.ContentBlockParamUnion{
-					OfRequestImageBlock: &anthropic.ImageBlockParam{
+					OfImage: &anthropic.ImageBlockParam{
 						Source: anthropic.ImageBlockParamSourceUnion{
-							OfBase64ImageSource: &anthropic.Base64ImageSourceParam{
+							OfBase64: &anthropic.Base64ImageSourceParam{
 								Data:      parts[1],
 								MediaType: anthropic.Base64ImageSourceMediaType(attachment.ContentType),
 							},

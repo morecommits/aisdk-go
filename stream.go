@@ -19,7 +19,7 @@ type Chat struct {
 type DataStream iter.Seq2[DataStreamPart, error]
 
 // WithToolCalling passes tool calls to the handleToolCall function.
-func (s DataStream) WithToolCalling(handleToolCall func(toolCall ToolCall) ToolCallResult) DataStream {
+func (s DataStream) WithToolCalling(handleToolCall func(toolCall ToolCall) any) DataStream {
 	return func(yield func(DataStreamPart, error) bool) {
 		// Track partial tool calls by ID
 		partialToolCalls := make(map[string]struct {
@@ -338,8 +338,8 @@ func (p ToolCallStreamPart) Format() (string, error) {
 
 // ToolResultStreamPart corresponds to TYPE_ID 'a'.
 type ToolResultStreamPart struct {
-	ToolCallID string         `json:"toolCallId"`
-	Result     ToolCallResult `json:"result"`
+	ToolCallID string `json:"toolCallId"`
+	Result     any    `json:"result"`
 }
 
 func (p ToolResultStreamPart) TypeID() byte { return 'a' }
@@ -498,7 +498,7 @@ type ToolInvocation struct {
 	ToolCallID string              `json:"toolCallId"`
 	ToolName   string              `json:"toolName"`
 	Args       any                 `json:"args"`
-	Result     ToolCallResult      `json:"result,omitempty"`
+	Result     any                 `json:"result,omitempty"`
 }
 
 func WriteDataStreamHeaders(w http.ResponseWriter) {
@@ -770,7 +770,7 @@ func (a *DataStreamAccumulator) Usage() Usage {
 	return a.usage
 }
 
-func toolResultToParts(result ToolCallResult) ([]Part, error) {
+func toolResultToParts(result any) ([]Part, error) {
 	switch r := result.(type) {
 	case []Part:
 		return r, nil

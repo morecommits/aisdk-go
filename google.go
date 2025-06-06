@@ -345,12 +345,12 @@ func GoogleToDataStream(stream iter.Seq2[*genai.GenerateContentResponse, error])
 
 		// Extract final usage data if available
 		if lastResp != nil && lastResp.UsageMetadata != nil {
-			if lastResp.UsageMetadata.PromptTokenCount != nil {
-				promptTokens := int64(*lastResp.UsageMetadata.PromptTokenCount)
+			if lastResp.UsageMetadata.PromptTokenCount > 0 {
+				promptTokens := int64(lastResp.UsageMetadata.PromptTokenCount)
 				finalUsage.PromptTokens = &promptTokens
 			}
-			if lastResp.UsageMetadata.CandidatesTokenCount != nil {
-				completionTokens := int64(*lastResp.UsageMetadata.CandidatesTokenCount)
+			if lastResp.UsageMetadata.CandidatesTokenCount > 0 {
+				completionTokens := int64(lastResp.UsageMetadata.CandidatesTokenCount)
 				finalUsage.CompletionTokens = &completionTokens
 			}
 		}
