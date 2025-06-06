@@ -7,7 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go v1.3.0
 	github.com/stretchr/testify v1.10.0
-	google.golang.org/genai v0.7.0
+	google.golang.org/genai v1.10.0
 )
 
 require (
