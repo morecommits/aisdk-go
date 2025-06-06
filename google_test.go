@@ -1,6 +1,7 @@
 package aisdk_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -102,30 +103,53 @@ func TestMessagesToGoogle_Live(t *testing.T) {
 		t.Skip("GOOGLE_API_KEY is not set")
 	}
 
-	// Test that messages are converted correctly for Google AI
+	// Create a Google AI client
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:  apiKey,
+		Backend: genai.BackendGeminiAPI,
+	})
+	require.NoError(t, err)
+
+	prompt := "use the 'print' tool to print 'Hello, world!' and then show the result"
+	// Test messages with a simple request
 	messages := []aisdk.Message{
 		{
-			Role:    "system",
-			Content: "use the 'test' tool to print 'Hello, world!' and then show the result",
-		},
-		{
-			Role:    "user",
-			Content: "Go ahead.",
+			Role: "user",
 			Parts: []aisdk.Part{
-				{
-					Type: aisdk.PartTypeText,
-					Text: "Go ahead.",
-				},
+				{Text: prompt, Type: aisdk.PartTypeText},
 			},
 		},
 	}
 
-	googleContents, err := aisdk.MessagesToGoogle(messages)
+	// Convert messages to Google format
+	contents, err := aisdk.MessagesToGoogle(messages)
 	require.NoError(t, err)
-	require.NotEmpty(t, googleContents)
+	require.Len(t, contents, 1)
+	require.Len(t, contents[0].Parts, 1)
+	require.Equal(t, contents[0].Parts[0].Text, prompt)
 
-	// System messages should be filtered out, so we should only have the user message
-	require.Len(t, googleContents, 1)
-	require.Equal(t, "user", googleContents[0].Role)
-	require.Equal(t, "Go ahead.", googleContents[0].Parts[0].Text)
+	_, err = genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:  os.Getenv("GOOGLE_API_KEY"),
+		Backend: genai.BackendGeminiAPI,
+	})
+	require.NoError(t, err)
+
+	stream := client.Models.GenerateContentStream(
+		ctx,
+		"gemini-2.0-flash",
+		contents,
+		nil,
+	)
+
+	dataStream := aisdk.GoogleToDataStream(stream)
+	var streamErr error
+	dataStream(func(part aisdk.DataStreamPart, err error) bool {
+		if err != nil {
+			streamErr = err
+			return false
+		}
+		return true
+	})
+	require.NoError(t, streamErr)
 }

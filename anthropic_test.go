@@ -181,15 +181,25 @@ func TestMessagesToAnthropic_Live(t *testing.T) {
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 
 	// Ensure messages are converted correctly.
+	prompt := "use the 'print' tool to print 'Hello, world!' and then show the result"
 	messages, systemPrompts, err := aisdk.MessagesToAnthropic([]aisdk.Message{
 		{
-			Role:    "system",
-			Content: "use the 'print' tool to print 'Hello, world!' and then show the result",
+			Role: "system",
+			Parts: []aisdk.Part{
+				{Text: "You are a helpful assistant.", Type: aisdk.PartTypeText},
+			},
 		},
 		{
-			Role: "user", Content: "Go ahead.",
+			Role: "user", Parts: []aisdk.Part{
+				{Text: prompt, Type: aisdk.PartTypeText},
+			},
 		},
 	})
+	require.Len(t, messages, 1)
+	require.Len(t, systemPrompts, 1)
+	require.Len(t, messages[0].Content, 1)
+	require.NotNil(t, messages[0].Content[0].OfText)
+	require.Equal(t, messages[0].Content[0].OfText.Text, prompt)
 	require.NoError(t, err)
 
 	stream := client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
