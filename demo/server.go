@@ -11,7 +11,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/kylecarbs/aisdk-go"
+	"github.com/coder/aisdk-go"
 	"github.com/openai/openai-go"
 	openaioption "github.com/openai/openai-go/option"
 	"google.golang.org/genai"

@@ -3,7 +3,7 @@ package aisdk_test
 import (
 	"testing"
 
-	"github.com/kylecarbs/aisdk-go"
+	"github.com/coder/aisdk-go"
 	"github.com/stretchr/testify/require"
 )
 

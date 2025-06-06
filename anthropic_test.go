@@ -12,7 +12,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
-	"github.com/kylecarbs/aisdk-go"
+	"github.com/coder/aisdk-go"
 	"github.com/stretchr/testify/require"
 )
 

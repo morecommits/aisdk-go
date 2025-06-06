@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kylecarbs/aisdk-go"
+	"github.com/coder/aisdk-go"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 
