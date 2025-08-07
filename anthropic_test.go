@@ -7,7 +7,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/coder/aisdk-go"
+	"github.com/morecommits/aisdk-go"
 	"github.com/stretchr/testify/require"
 )
 

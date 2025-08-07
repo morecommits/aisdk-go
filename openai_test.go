@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/coder/aisdk-go"
+	"github.com/morecommits/aisdk-go"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/stretchr/testify/require"

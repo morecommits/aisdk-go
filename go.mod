@@ -1,4 +1,4 @@
-module github.com/coder/aisdk-go
+module github.com/morecommits/aisdk-go
 
 go 1.23.7
 
