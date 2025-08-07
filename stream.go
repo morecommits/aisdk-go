@@ -122,6 +122,24 @@ func (s DataStream) WithToolCalling(handleToolCall func(toolCall ToolCall) any) 
 	}
 }
 
+// WithAccumulator passes parts to the accumulator which aggregates them into a single message.
+func (s DataStream) WithAccumulator(accumulator *DataStreamAccumulator) DataStream {
+	return func(yield func(DataStreamPart, error) bool) {
+		for part, err := range s {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			err = accumulator.Push(part)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			yield(part, nil)
+		}
+	}
+}
+
 // Pipe iterates over the DataStream and writes the parts to the writer.
 func (s DataStream) Pipe(w io.Writer) error {
 	flusher, ok := w.(http.Flusher)
