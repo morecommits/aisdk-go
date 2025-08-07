@@ -209,7 +209,6 @@ func AnthropicToDataStream(stream *ssestream.Stream[anthropic.MessageStreamEvent
 	return func(yield func(DataStreamPart, error) bool) {
 		var lastChunk *anthropic.MessageStreamEventUnion
 		var finalReason FinishReason = FinishReasonUnknown
-		var finalUsage Usage
 		var currentToolCall struct {
 			ID   string
 			Args string
@@ -265,10 +264,6 @@ func AnthropicToDataStream(stream *ssestream.Stream[anthropic.MessageStreamEvent
 			case anthropic.MessageDeltaEvent:
 				if event.Delta.StopReason == "tool_use" {
 					finalReason = FinishReasonToolCalls
-					if event.Usage.OutputTokens != 0 {
-						tokens := event.Usage.OutputTokens
-						finalUsage.CompletionTokens = &tokens
-					}
 
 					// Reset current tool call after emitting the final delta
 					currentToolCall = struct {
@@ -286,7 +281,6 @@ func AnthropicToDataStream(stream *ssestream.Stream[anthropic.MessageStreamEvent
 				// Send final finish step
 				if !yield(FinishStepStreamPart{
 					FinishReason: finalReason,
-					Usage:        finalUsage,
 					IsContinued:  false,
 				}, nil) {
 					return
@@ -295,7 +289,6 @@ func AnthropicToDataStream(stream *ssestream.Stream[anthropic.MessageStreamEvent
 				// Send final finish message
 				if !yield(FinishMessageStreamPart{
 					FinishReason: finalReason,
-					Usage:        finalUsage,
 				}, nil) {
 					return
 				}
@@ -317,7 +310,6 @@ func AnthropicToDataStream(stream *ssestream.Stream[anthropic.MessageStreamEvent
 
 			yield(FinishMessageStreamPart{
 				FinishReason: finalReason,
-				Usage:        finalUsage,
 			}, nil)
 		}
 	}

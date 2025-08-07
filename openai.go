@@ -239,7 +239,6 @@ func OpenAIToDataStream(stream *ssestream.Stream[openai.ChatCompletionChunk]) Da
 		}
 
 		var finishReason FinishReason
-		var promptTokens, completionTokens *int64
 
 		if lastChunk != nil && len(lastChunk.Choices) > 0 {
 			choice := lastChunk.Choices[0]
@@ -250,23 +249,10 @@ func OpenAIToDataStream(stream *ssestream.Stream[openai.ChatCompletionChunk]) Da
 			default:
 				finishReason = FinishReasonStop
 			}
-
-			if lastChunk.Usage.JSON.CompletionTokens.Valid() {
-				tokens := int64(lastChunk.Usage.CompletionTokens)
-				completionTokens = &tokens
-			}
-			if lastChunk.Usage.JSON.PromptTokens.Valid() {
-				tokens := int64(lastChunk.Usage.PromptTokens)
-				promptTokens = &tokens
-			}
 		}
 
 		yield(FinishMessageStreamPart{
 			FinishReason: finishReason,
-			Usage: Usage{
-				PromptTokens:     promptTokens,
-				CompletionTokens: completionTokens,
-			},
 		}, nil)
 	}
 }

@@ -23,10 +23,6 @@ func TestDataStreamAccumulator_SimpleText(t *testing.T) {
 		aisdk.TextStreamPart{Content: " can have a conversation about it."},
 		aisdk.FinishMessageStreamPart{
 			FinishReason: aisdk.FinishReasonStop,
-			Usage: aisdk.Usage{
-				PromptTokens:     int64Ptr(10),
-				CompletionTokens: int64Ptr(90),
-			},
 		},
 	}
 
@@ -77,9 +73,6 @@ func TestDataStreamAccumulator_SimpleText(t *testing.T) {
 	if acc.FinishReason() != aisdk.FinishReasonStop {
 		t.Errorf("Expected finish reason %q, got %q", aisdk.FinishReasonStop, acc.FinishReason())
 	}
-
-	require.Equal(t, int64Ptr(10), acc.Usage().PromptTokens)
-	require.Equal(t, int64Ptr(90), acc.Usage().CompletionTokens)
 }
 
 // Helper function to create a pointer to an int64
@@ -104,8 +97,8 @@ func TestDataStreamAccumulator_ToolCall(t *testing.T) {
 			ToolCallID: "tool_123",
 			Result:     map[string]any{"temperature": 72, "unit": "F"},
 		},
-		aisdk.FinishStepStreamPart{FinishReason: aisdk.FinishReasonToolCalls, Usage: aisdk.Usage{CompletionTokens: int64Ptr(90)}, IsContinued: false},
-		aisdk.FinishMessageStreamPart{FinishReason: aisdk.FinishReasonToolCalls, Usage: aisdk.Usage{CompletionTokens: int64Ptr(90)}},
+		aisdk.FinishStepStreamPart{FinishReason: aisdk.FinishReasonToolCalls, IsContinued: false},
+		aisdk.FinishMessageStreamPart{FinishReason: aisdk.FinishReasonToolCalls},
 	}
 
 	expectedMessages := []aisdk.Message{
@@ -138,5 +131,4 @@ func TestDataStreamAccumulator_ToolCall(t *testing.T) {
 
 	messages := acc.Messages()
 	require.EqualExportedValues(t, expectedMessages, messages)
-	require.Equal(t, int64Ptr(90), acc.Usage().CompletionTokens)
 }

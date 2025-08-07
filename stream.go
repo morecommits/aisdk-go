@@ -358,16 +358,9 @@ const (
 	FinishReasonUnknown       FinishReason = "unknown"
 )
 
-// Usage details the token usage.
-type Usage struct {
-	PromptTokens     *int64 `json:"promptTokens"`
-	CompletionTokens *int64 `json:"completionTokens"`
-}
-
 // FinishStepStreamPart corresponds to TYPE_ID 'e'.
 type FinishStepStreamPart struct {
 	FinishReason FinishReason `json:"finishReason"`
-	Usage        Usage        `json:"usage"`
 	IsContinued  bool         `json:"isContinued"`
 }
 
@@ -379,7 +372,6 @@ func (p FinishStepStreamPart) Format() (string, error) {
 // FinishMessageStreamPart corresponds to TYPE_ID 'd'.
 type FinishMessageStreamPart struct {
 	FinishReason FinishReason `json:"finishReason"`
-	Usage        Usage        `json:"usage"`
 }
 
 func (p FinishMessageStreamPart) TypeID() byte { return 'd' }
@@ -501,7 +493,6 @@ type DataStreamAccumulator struct {
 	currentMessage *Message
 	wipToolCalls   map[string]*Part // Keyed by ToolCallID, points to Part in currentMessage.Parts
 	finishReason   FinishReason
-	usage          Usage
 }
 
 func (a *DataStreamAccumulator) ensureCurrentMessage() {
@@ -730,7 +721,6 @@ func (a *DataStreamAccumulator) Push(part DataStreamPart) error {
 		a.finishReason = p.FinishReason
 		a.currentMessage = nil
 		a.wipToolCalls = nil
-		a.usage = p.Usage
 
 	case ErrorStreamPart:
 		a.finishReason = FinishReasonError
@@ -752,10 +742,6 @@ func (a *DataStreamAccumulator) Messages() []Message {
 
 func (a *DataStreamAccumulator) FinishReason() FinishReason {
 	return a.finishReason
-}
-
-func (a *DataStreamAccumulator) Usage() Usage {
-	return a.usage
 }
 
 func toolResultToParts(result any) ([]Part, error) {

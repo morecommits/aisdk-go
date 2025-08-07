@@ -9,7 +9,7 @@
 
 A Go implementation of Vercel's AI SDK [Data Stream Protocol](https://sdk.vercel.ai/docs/ai-sdk-ui/stream-protocol#data-stream-example).
 
-- Supports OpenAI, Google, and Anthropic (with Bedrock support)
+- Supports OpenAI and Anthropic (with Bedrock support)
 - Examples for integrating `useChat`
 - Chain tool usage in Go, just like `maxSteps`
 
@@ -17,9 +17,9 @@ A Go implementation of Vercel's AI SDK [Data Stream Protocol](https://sdk.vercel
 // frontend.tsx
 
 const { messages } = useChat({
-    // Points to our Go backend!
-    api: "/api/chat",
-})
+  // Points to our Go backend!
+  api: "/api/chat",
+});
 ```
 
 ```go
