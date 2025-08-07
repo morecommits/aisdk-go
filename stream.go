@@ -135,6 +135,12 @@ func (s DataStream) Pipe(w io.Writer) error {
 			pipeErr = err
 			return false
 		}
+
+		// Skip streaming 'c' (ToolCallDeltaStreamPart) and '9' (ToolCallStreamPart) messages
+		if part.TypeID() == 'c' || part.TypeID() == '9' {
+			return true
+		}
+
 		formatted, err := part.Format()
 		if err != nil {
 			pipeErr = err
